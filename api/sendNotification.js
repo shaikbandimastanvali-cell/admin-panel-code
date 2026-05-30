@@ -49,13 +49,27 @@ export default async function handler(req, res) {
       return res.status(200).json({ message: 'No tokens found. Database updated.' });
     }
 
-    // 3. Construct the actual phone push notification
+    // 3. Construct the actual phone push notification with strict Android WebPush rules
     const message = {
+      tokens: tokens,
       notification: {
         title: title,
         body: body,
       },
-      tokens: tokens, 
+      webpush: {
+        headers: {
+          Urgency: "high"
+        },
+        notification: {
+          title: title,
+          body: body,
+          icon: "https://esports-tournament-app-beta.vercel.app/favicon.svg",
+          vibrate: [200, 100, 200, 100, 200],
+        },
+        fcmOptions: {
+          link: "https://esports-tournament-app-beta.vercel.app/"
+        }
+      }
     };
 
     // 4. Blast the notification to all devices
