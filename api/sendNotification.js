@@ -6,28 +6,25 @@ if (!admin.apps.length) {
     credential: admin.credential.cert({
       projectId: process.env.FIREBASE_PROJECT_ID,
       clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      // The replace function safely handles the hidden newline characters in the Vercel variables
       privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
     }),
   });
 }
 
 export default async function handler(req, res) {
-  // Only allow POST requests from our Admin button
+  console.log("--- PUSH NOTIFICATION API TRIGGERED ---");
+  
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
     const { title, body } = req.body;
-
-    if (!title || !body) {
-      return res.status(400).json({ error: 'Missing title or body' });
-    }
+    console.log(`Message Details: Title="${title}", Body="${body}"`);
 
     const db = admin.firestore();
 
-    // 1. Fetch all users from your specific Firestore path
+    console.log("Fetching users from Firestore...");
     const usersSnapshot = await db
       .collection('artifacts')
       .doc('ff-tournament-live-db')
@@ -36,52 +33,64 @@ export default async function handler(req, res) {
       .collection('users')
       .get();
 
-    // 2. Extract FCM Tokens
     const tokens = [];
     usersSnapshot.forEach((doc) => {
       const data = doc.data();
-      if (data.fcmToken) {
+      // We only grab tokens if they exist AND notifications are enabled
+      if (data.fcmToken && data.notificationsEnabled !== false) {
         tokens.push(data.fcmToken);
       }
     });
 
+    console.log(`Found ${tokens.length} valid FCM tokens in Firestore.`);
+
     if (tokens.length === 0) {
-      return res.status(200).json({ message: 'No tokens found. Database updated.' });
+      console.log("ABORTING: No tokens found in database. User hasn't granted permission or logged in.");
+      return res.status(200).json({ message: 'No tokens found.' });
     }
 
-    // 3. Construct the actual phone push notification with strict Android WebPush rules
+    // This payload includes BOTH "notification" and "data" to guarantee Android wakes up
     const message = {
       tokens: tokens,
       notification: {
         title: title,
         body: body,
       },
+      data: {
+        title: title,
+        body: body,
+        click_action: "https://esports-tournament-app-beta.vercel.app/"
+      },
       webpush: {
-        headers: {
-          Urgency: "high"
-        },
+        headers: { Urgency: "high" },
         notification: {
-          title: title,
-          body: body,
           icon: "https://esports-tournament-app-beta.vercel.app/favicon.svg",
-          vibrate: [200, 100, 200, 100, 200],
-        },
-        fcmOptions: {
-          link: "https://esports-tournament-app-beta.vercel.app/"
+          vibrate: [200, 100, 200, 100, 200]
         }
       }
     };
 
-    // 4. Blast the notification to all devices
+    console.log("Sending payload to Firebase servers...");
     const response = await admin.messaging().sendEachForMulticast(message);
 
+    console.log(`Push Results: ${response.successCount} succeeded, ${response.failureCount} failed.`);
+    
+    // If any failed, print EXACTLY why they failed (e.g. "invalid-registration-token")
+    if (response.failureCount > 0) {
+      response.responses.forEach((resp, idx) => {
+        if (!resp.success) {
+          console.error(`Token ${idx} failed:`, resp.error);
+        }
+      });
+    }
+
     return res.status(200).json({
-      message: 'Push sent successfully',
+      message: 'Push processed',
       successes: response.successCount,
       failures: response.failureCount,
     });
   } catch (error) {
-    console.error('Push Error:', error);
+    console.error('CRITICAL API ERROR:', error);
     return res.status(500).json({ error: error.message });
   }
 }
