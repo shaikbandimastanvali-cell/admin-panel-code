@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, addDoc, deleteDoc } from 'firebase/firestore';
-import { Home, Trophy, User as UIcon, Wallet, Settings, LogOut, Users, Gamepad2, Plus, Edit, Trash2, Check, X, Search, Menu, ShieldAlert, Clock, ArrowUpRight, ArrowDownLeft, Info, PlayCircle, ChevronRight, CheckCircle2, Loader2, Link as LinkIcon, XCircle } from 'lucide-react';
+import { Home, Trophy, User as UIcon, Wallet, Settings, LogOut, Users, Gamepad2, Plus, Edit, Trash2, Check, X, Search, Menu, ShieldAlert, Clock, ArrowUpRight, ArrowDownLeft, Info, PlayCircle, ChevronRight, CheckCircle2, Loader2, Link as LinkIcon, XCircle, Bell } from 'lucide-react';
 
 // --- EXACT SAME FIREBASE CONFIG AS USER PANEL ---
 const firebaseConfig = {
@@ -28,7 +28,7 @@ const fDate = (d) => {
 
 export default function AdminApp() {
   const [fbUser, setFbUser] = useState(null); const [admin, setAdmin] = useState(null); const [loading, setLoading] = useState(true);
-  const [data, setData] = useState({ users: [], games: [], modes: [], tournaments: [], transactions: [], bannedDevices: [] });
+  const [data, setData] = useState({ users: [], games: [], modes: [], tournaments: [], transactions: [], bannedDevices: [], messages: [] });
   const [settings, setSettings] = useState({ appName: 'Elite Esports', currencySymbol: '🪙', currencyName: 'Coins', upiId: '', referralBonusPercent: 10, minWithdraw: 10, minReferralWithdraw: 300, termsAndConditions: 'Play fair.', maintenance: false, maintenanceMsg: 'Updating app...' });
 
   useEffect(() => {
@@ -38,7 +38,7 @@ export default function AdminApp() {
 
   useEffect(() => {
     if (!fbUser) return;
-    const unsubs = ['users','games','modes','tournaments','transactions','bannedDevices'].map(c => onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', c), s => setData(p => ({ ...p, [c]: s.docs.map(d => ({ id: d.id, ...d.data() })) }))));
+    const unsubs = ['users','games','modes','tournaments','transactions','bannedDevices', 'messages'].map(c => onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', c), s => setData(p => ({ ...p, [c]: s.docs.map(d => ({ id: d.id, ...d.data() })) }))));
     unsubs.push(onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global'), d => { if (d.exists()) setSettings(p => ({...p, ...d.data()})); }));
     return () => unsubs.forEach(u => u());
   }, [fbUser]);
@@ -68,11 +68,11 @@ export default function AdminApp() {
 function AdminLayout({ u, data, sets, out }) {
   const [view, setView] = useState('dashboard'); const [md, setMd] = useState(null);
   const acc = (s) => u.role === 'admin' || (u.permissions||[]).includes(s);
-  const navs = [{i:'dashboard',ic:Home,l:'Dashboard'},{i:'users',ic:Users,l:'Users'},{i:'games',ic:Gamepad2,l:'Games & Modes'},{i:'tournaments',ic:Trophy,l:'Tournaments'},{i:'deposits',ic:ArrowDownLeft,l:'Deposits'},{i:'withdraws',ic:ArrowUpRight,l:'Withdraws'},{i:'staff',ic:ShieldAlert,l:'Staff'},{i:'deviceBans',ic:ShieldAlert,l:'Device Bans'},{i:'settings',ic:Settings,l:'Settings'}];
+  const navs = [{i:'dashboard',ic:Home,l:'Dashboard'},{i:'users',ic:Users,l:'Users'},{i:'games',ic:Gamepad2,l:'Games & Modes'},{i:'tournaments',ic:Trophy,l:'Tournaments'},{i:'deposits',ic:ArrowDownLeft,l:'Deposits'},{i:'withdraws',ic:ArrowUpRight,l:'Withdraws'},{i:'messages',ic:Bell,l:'Messages'},{i:'staff',ic:ShieldAlert,l:'Staff'},{i:'deviceBans',ic:ShieldAlert,l:'Device Bans'},{i:'settings',ic:Settings,l:'Settings'}];
   
   const vMap = {
     dashboard: <Dash d={data} s={sets}/>, users: <UserMgr d={data} md={setMd} s={sets}/>, games: <GamesMgr d={data} md={setMd} u={u}/>, tournaments: <TourneyMgr d={data} md={setMd} u={u} s={sets}/>,
-    deposits: <FinMgr t="deposit" d={data} md={setMd} s={sets}/>, withdraws: <FinMgr t="withdraw" d={data} md={setMd} s={sets}/>, staff: <StaffMgr d={data} md={setMd} u={u}/>, deviceBans: <DeviceBanMgr d={data} md={setMd}/>, settings: <SetMgr s={sets} md={setMd}/>
+    deposits: <FinMgr t="deposit" d={data} md={setMd} s={sets}/>, withdraws: <FinMgr t="withdraw" d={data} md={setMd} s={sets}/>, messages: <MessageMgr d={data} md={setMd}/>, staff: <StaffMgr d={data} md={setMd} u={u}/>, deviceBans: <DeviceBanMgr d={data} md={setMd}/>, settings: <SetMgr s={sets} md={setMd}/>
   };
 
   return (
@@ -89,12 +89,13 @@ function UniModal({ m, sm }) {
   return (
     <div className="fixed inset-0 bg-slate-900/80 z-50 flex items-center justify-center p-4"><div className="bg-white rounded-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95"><div className={`p-4 font-black uppercase text-white ${m.t==='err'?'bg-rose-500':m.t==='confirm'?'bg-amber-500':'bg-blue-600'}`}>{m.title}</div><div className="p-6 space-y-4 font-medium text-slate-700">{m.msg&&<p>{m.msg}</p>}
       {m.t==='estats'&&<div className="grid grid-cols-2 gap-4"><div><label className="text-[10px] font-black uppercase text-slate-400">Total Bal</label><input type="number" value={i1} onChange={e=>s1(e.target.value)} className="w-full p-2 border rounded font-black outline-none"/></div><div><label className="text-[10px] font-black uppercase text-slate-400">Win Bal</label><input type="number" value={i5} onChange={e=>s5(e.target.value)} className="w-full p-2 border rounded font-black outline-none"/></div><div><label className="text-[10px] font-black uppercase text-slate-400">Total Wins</label><input type="number" value={i2} onChange={e=>s2(e.target.value)} className="w-full p-2 border rounded font-black outline-none"/></div><div><label className="text-[10px] font-black uppercase text-slate-400">Kills</label><input type="number" value={i3} onChange={e=>s3(e.target.value)} className="w-full p-2 border rounded font-black outline-none"/></div><div><label className="text-[10px] font-black uppercase text-slate-400">Refs</label><input type="number" value={i4} onChange={e=>s4(e.target.value)} className="w-full p-2 border rounded font-black outline-none"/></div></div>}
+      {m.t==='message'&&<><input type="text" placeholder="Message Title" value={i1} onChange={e=>s1(e.target.value)} className="w-full p-3 border rounded-lg font-bold outline-none"/><textarea placeholder="Message Body" value={i2} onChange={e=>s2(e.target.value)} className="w-full p-3 border rounded-lg h-32 font-bold outline-none"/></>}
       {m.t==='game'&&<><input type="text" placeholder="Game Name" value={i1} onChange={e=>s1(e.target.value)} className="w-full p-3 border rounded-lg font-bold"/><input type="text" placeholder="Banner URL" value={i2} onChange={e=>s2(e.target.value)} className="w-full p-3 border rounded-lg"/></>}
       {m.t==='mode'&&<><select value={i1} onChange={e=>s1(e.target.value)} className="w-full p-3 border rounded-lg font-bold"><option value="">Select Game</option>{m.gl.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}</select><input type="text" placeholder="Mode Name" value={i2} onChange={e=>s2(e.target.value)} className="w-full p-3 border rounded-lg font-bold"/><input type="text" placeholder="Banner URL" value={i3} onChange={e=>s3(e.target.value)} className="w-full p-3 border rounded-lg"/></>}
       {m.t==='room'&&<><input type="text" placeholder="Room ID" value={i1} onChange={e=>s1(e.target.value)} className="w-full p-3 border rounded-lg font-black text-xl"/><input type="text" placeholder="Password" value={i2} onChange={e=>s2(e.target.value)} className="w-full p-3 border rounded-lg font-black text-xl"/></>}
       {m.t==='staff'&&<><input type="email" placeholder="User Email" value={i1} disabled={m.ed} onChange={e=>s1(e.target.value)} className="w-full p-3 border rounded-lg font-bold disabled:bg-slate-100"/><div className="grid grid-cols-2 gap-2">{['dashboard','users','games','tournaments','finance'].map(k=><button key={k} onClick={()=>setP({...prm,[k]:!prm[k]})} className={`p-2 rounded border text-xs font-bold uppercase flex justify-between cursor-pointer ${prm[k]?'bg-blue-50 border-blue-500 text-blue-700':''}`}>{k} {prm[k]&&<CheckCircle2 className="w-4 h-4"/>}</button>)}</div></>}
       {m.t==='social'&&<><input type="text" placeholder="Platform Name" value={i1} onChange={e=>s1(e.target.value)} className="w-full p-3 border rounded-lg font-bold"/><input type="text" placeholder="Profile URL" value={i2} onChange={e=>s2(e.target.value)} className="w-full p-3 border rounded-lg font-medium"/><input type="text" placeholder="Icon URL (Optional)" value={i3} onChange={e=>s3(e.target.value)} className="w-full p-3 border rounded-lg font-medium"/></>}
-    </div><div className="p-4 bg-slate-50 border-t flex justify-end gap-2">{m.onC&&<button onClick={()=>sm(null)} className="px-4 font-bold text-slate-500 cursor-pointer">Cancel</button>}<button onClick={()=>{if(m.onC){m.t==='staff'?m.onC(i1,Object.keys(prm).filter(x=>prm[x])):m.onC(i1,i2,i3,i4,i5);} sm(null);}} className={`px-6 py-2 text-white font-black rounded-lg cursor-pointer ${m.t==='err'?'bg-rose-500':m.t==='confirm'?'bg-amber-600':'bg-blue-600'}`}>OK</button></div></div></div>
+    </div><div className="p-4 bg-slate-50 border-t flex justify-end gap-2">{m.onC&&<button onClick={()=>sm(null)} className="px-4 font-bold text-slate-500 cursor-pointer">Cancel</button>}<button onClick={()=>{if(m.onC){m.t==='staff'?m.onC(i1,Object.keys(prm).filter(x=>prm[x])) : m.t==='message'?m.onC(i1,i2) : m.onC(i1,i2,i3,i4,i5);} sm(null);}} className={`px-6 py-2 text-white font-black rounded-lg cursor-pointer ${m.t==='err'?'bg-rose-500':m.t==='confirm'?'bg-amber-600':'bg-blue-600'}`}>OK</button></div></div></div>
   );
 }
 
@@ -137,6 +138,7 @@ function DeviceBanMgr({ d, md }) {
          Banned Devices
       </h2>
       <div className="space-y-3">
+        {d.bannedDevices.length === 0 && <div className="text-slate-500 font-bold p-6 bg-slate-50 text-center rounded-xl">No banned devices found.</div>}
         {d.bannedDevices.map(b => (
           <div key={b.id} className="p-4 border rounded-xl flex justify-between items-center">
             <div>
@@ -162,6 +164,55 @@ function DeviceBanMgr({ d, md }) {
             </button>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function MessageMgr({ d, md }) {
+  const sorted = [...(d.messages || [])].sort((a,b) => new Date(b.createdAt||0) - new Date(a.createdAt||0));
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center bg-white p-6 rounded-2xl border">
+        <h2 className="text-xl font-black uppercase">Messages & Notifications</h2>
+        <button onClick={() => md({t:'message', title:'New Message', onC: async (title, body) => {
+          if(!title || !body) return;
+          try {
+            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'messages'), { title, body, createdAt: new Date().toISOString(), readBy: [] });
+            md({t:'alert', title:'Success', msg:'Message pushed successfully'});
+          } catch(e) { md({t:'err', title:'Error', msg:e.message}); }
+        }})} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-black text-xs uppercase cursor-pointer"><Plus className="w-4 h-4 inline"/> Create</button>
+      </div>
+      <div className="bg-white rounded-2xl border overflow-hidden">
+        <div className="divide-y">
+          {sorted.length === 0 && <div className="p-8 text-center text-slate-500 font-bold">No messages found.</div>}
+          {sorted.map(m => (
+            <div key={m.id} className="p-5 hover:bg-slate-50 transition-colors flex justify-between items-start gap-4">
+              <div className="flex-1">
+                <div className="font-black text-lg text-slate-800 uppercase">{m.title}</div>
+                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1 mb-2">{fDate(m.createdAt)}</div>
+                <div className="text-sm font-medium text-slate-600 whitespace-pre-wrap">{m.body}</div>
+                <div className="text-[10px] text-blue-500 font-bold uppercase mt-3 tracking-widest">Read by: {(m.readBy || []).length} users</div>
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <button onClick={() => md({t:'message', title:'Edit Message', d1: m.title, d2: m.body, onC: async (title, body) => {
+                  if(!title || !body) return;
+                  try {
+                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'messages', m.id), { title, body });
+                    md({t:'alert', title:'Success', msg:'Message updated successfully'});
+                  } catch(e) { md({t:'err', title:'Error', msg:e.message}); }
+                }})} className="p-2 bg-slate-100 text-slate-600 rounded hover:bg-blue-100 hover:text-blue-600 transition-colors cursor-pointer"><Edit className="w-4 h-4"/></button>
+                <button onClick={() => md({t:'confirm', title:'Delete Message', msg:'Permanently delete this message for all users?', onC: async () => {
+                  try {
+                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'messages', m.id));
+                    md({t:'alert', title:'Success', msg:'Message deleted'});
+                  } catch(e) { md({t:'err', title:'Error', msg:e.message}); }
+                }})} className="p-2 bg-rose-50 text-rose-600 rounded hover:bg-rose-500 hover:text-white transition-colors cursor-pointer"><Trash2 className="w-4 h-4"/></button>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -351,8 +402,7 @@ function StaffMgr({ d, md, u }) {
 
 function SetMgr({ s, md }) {
   const [ls, sls] = useState(s || {}); const [sv, setSv] = useState(false);
-  const [msgTitle, setMsgTitle] = useState(''); const [msgBody, setMsgBody] = useState('');
-  const [isPushing, setIsPushing] = useState(false);
+  
   const save = async () => { 
     setSv(true); 
     try { 
@@ -367,7 +417,5 @@ function SetMgr({ s, md }) {
   <div className="bg-slate-50 p-4 rounded-xl border col-span-full"><label className="text-[10px] font-black uppercase text-slate-400 block mb-2">UPI ID</label><input value={ls.upiId||''} onChange={e=>sls({...ls,upiId:e.target.value})} placeholder="example@okicici" className="w-full p-3 border rounded font-bold outline-none"/></div>
   <div className="bg-rose-50 p-4 rounded-xl border border-rose-200 col-span-full"><div className="flex justify-between items-center mb-4"><span className="text-sm font-black uppercase text-rose-700">Maintenance Mode</span><input type="checkbox" checked={ls.maintenance||false} onChange={e=>sls({...ls,maintenance:e.target.checked})} className="w-6 h-6 cursor-pointer"/></div>{ls.maintenance&&<input type="text" value={ls.maintenanceMsg||''} onChange={e=>sls({...ls,maintenanceMsg:e.target.value})} placeholder="Maintenance Text" className="w-full p-3 border rounded font-bold outline-none"/>}</div><div className="bg-slate-50 p-4 rounded-xl border col-span-full"><label className="text-[10px] font-black uppercase text-slate-400 block mb-2">Terms & Conditions</label><textarea value={ls.termsAndConditions||''} onChange={e=>sls({...ls,termsAndConditions:e.target.value})} className="w-full p-3 border rounded font-bold outline-none h-32"/></div></div>
   <div className="bg-slate-50 p-4 rounded-xl border"><div className="flex justify-between items-center mb-4"><h3 className="font-black uppercase text-sm">Support Channels</h3><button onClick={()=>md({t:'social',title:'Add Social Media',onC:(n,u,i)=>{sls({...ls, supportChannels: [...(ls.supportChannels||[]), {name:n,url:u,iconUrl:i}]})}})} className="px-3 py-1 bg-indigo-100 text-indigo-700 font-black text-[10px] uppercase rounded cursor-pointer">+ Add</button></div><div className="space-y-2">{(ls.supportChannels||[]).map((c,i)=><div key={i} className="flex justify-between items-center bg-white p-3 border rounded font-bold text-sm"><div>{c.name} <span className="text-[10px] text-slate-400 font-mono block">{c.url}</span></div><button onClick={()=>{const arr=[...(ls.supportChannels||[])]; arr.splice(i,1); sls({...ls,supportChannels:arr})}} className="text-rose-500 p-2 cursor-pointer"><Trash2 className="w-4 h-4"/></button></div>)}</div></div>
-  
-  <div className="bg-blue-50 p-4 rounded-xl border border-blue-200 col-span-full"><h3 className="font-black uppercase text-sm mb-4">Push Notification</h3><input type="text" placeholder="Message Title" value={msgTitle} onChange={e=>setMsgTitle(e.target.value)} className="w-full p-3 border rounded mb-3 font-bold"/><textarea placeholder="Message Body" value={msgBody} onChange={e=>setMsgBody(e.target.value)} className="w-full p-3 border rounded h-28 font-bold"/><button disabled={isPushing} onClick={async ()=>{ if(!msgTitle || !msgBody || isPushing) return; setIsPushing(true); try { await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'messages'), { title: msgTitle, body: msgBody, createdAt: new Date().toISOString(), readBy: [] }); setMsgTitle(''); setMsgBody(''); md({t:'alert',title:'Success',msg:'Message pushed to all users'}); } catch(err) { md({t:'err',title:'Error',msg:err.message}); } setIsPushing(false); }} className="mt-3 px-5 py-3 bg-blue-600 text-white rounded-lg font-black uppercase cursor-pointer disabled:opacity-50">{isPushing?'Pushing...':'Push Message'}</button></div>
   </div>;
 }
