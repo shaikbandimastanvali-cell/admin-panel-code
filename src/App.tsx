@@ -180,6 +180,7 @@ function MessageMgr({ d, md }) {
           if(!title || !body) return;
           try {
             await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'messages'), { title, body, createdAt: new Date().toISOString(), readBy: [] });
+            await fetch('/api/sendNotification', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, body }) }).catch(e => console.error("API Ping Failed:", e));
             md({t:'alert', title:'Success', msg:'Message pushed successfully'});
           } catch(e) { md({t:'err', title:'Error', msg:e.message}); }
         }})} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-black text-xs uppercase cursor-pointer"><Plus className="w-4 h-4 inline"/> Create</button>
