@@ -17,12 +17,78 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-const appId = 'ff-tournament-live-db'; 
+const appId = 'ff-tournament-live-db';
 
 const fDate = (d) => {
   if (!d) return 'N/A';
   const dt = new Date(d);
   return isNaN(dt.getTime()) ? 'N/A' : dt.toLocaleString();
+};
+
+// ─────────────────────────────────────────────
+// FIX 1: Centralised notification sender
+// Reads FCM tokens from Firestore per UID and
+// sends them in the payload so the backend can
+// actually deliver background/killed-app pushes.
+// ─────────────────────────────────────────────
+const sendPushNotification = async ({ title, body, targetUids, data = {}, users }) => {
+  // Build a map of uid -> fcmToken from the local users array
+  // (tokens are stored by the mobile app on login as user.fcmToken)
+  let fcmTokens = [];
+
+  if (targetUids[0] === 'all') {
+    fcmTokens = users
+      .filter(u => u.fcmToken && u.role === 'user')
+      .map(u => u.fcmToken);
+  } else {
+    fcmTokens = targetUids
+      .map(uid => users.find(u => u.uid === uid)?.fcmToken)
+      .filter(Boolean);
+  }
+
+  // Even if no FCM tokens exist yet (e.g. fresh install), still call the API
+  // — the backend may have its own token store.
+  const payload = {
+    title,
+    body,
+    targetUids,          // keep for backend UID-based lookup as fallback
+    fcmTokens,           // FIX: pass device tokens directly
+    data: {              // FIX: structured data payload for in-app copy buttons
+      ...data,
+      click_action: 'FLUTTER_NOTIFICATION_CLICK',
+    },
+    // FIX: Android high-priority so the notification wakes the device
+    android: {
+      priority: 'high',
+      notification: {
+        sound: 'default',
+        channel_id: 'tournament_alerts',
+      },
+    },
+    // FIX: APNs config for iOS background delivery
+    apns: {
+      headers: { 'apns-priority': '10' },
+      payload: {
+        aps: {
+          sound: 'default',
+          'content-available': 1,
+        },
+      },
+    },
+  };
+
+  const res = await fetch('https://esports-tournament-app-beta.vercel.app/api/sendNotification', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => 'Unknown error');
+    throw new Error(`Notification API returned ${res.status}: ${errText}`);
+  }
+
+  return res.json().catch(() => ({}));
 };
 
 export default function AdminApp() {
@@ -48,15 +114,15 @@ export default function AdminApp() {
     if (fbUser && data.users.length === 0) { setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', "root-1"), { uid: "root-1", name: 'Super Admin', email: 'qwerty@qwerty.com', password: 'zxcvbnm', role: 'admin', balance: 0, depositBalance: 0, winningBalance: 0, totalWinnings: 0, totalKills: 0, joinedDate: new Date().toISOString(), isBanned: false, permissions: [] }); }
   }, [data.users, fbUser]);
 
-  const login = (e) => { 
-    e.preventDefault(); 
-    const u = data.users.find(x => x.email === e.target.em.value && x.password === e.target.pw.value); 
-    if(u && (u.role==='admin'||u.role==='staff')) { 
-      localStorage.setItem('admin_uid', u.uid); 
-      setAdmin(u); 
-    } else alert("Access Denied/Invalid"); 
+  const login = (e) => {
+    e.preventDefault();
+    const u = data.users.find(x => x.email === e.target.em.value && x.password === e.target.pw.value);
+    if(u && (u.role==='admin'||u.role==='staff')) {
+      localStorage.setItem('admin_uid', u.uid);
+      setAdmin(u);
+    } else alert("Access Denied/Invalid");
   };
-  
+
   if (loading) return <div className="flex h-screen items-center justify-center bg-slate-900"><Loader2 className="w-10 h-10 text-blue-500 animate-spin"/></div>;
   if (!admin) return (
     <div className="flex min-h-screen items-center justify-center bg-slate-900 p-4"><div className="w-full max-w-sm bg-slate-800 rounded-2xl shadow-xl overflow-hidden"><div className="p-6 bg-slate-950 text-center"><ShieldAlert className="w-12 h-12 text-blue-500 mx-auto mb-2"/><h2 className="text-xl font-black text-white uppercase tracking-widest">Admin Access</h2></div><form onSubmit={login} className="p-6 space-y-4"><input type="email" name="em" placeholder="Email" required className="w-full p-3 rounded-lg bg-slate-900 text-white border border-slate-700 outline-none focus:border-blue-500"/><input type="password" name="pw" placeholder="Password" required className="w-full p-3 rounded-lg bg-slate-900 text-white border border-slate-700 outline-none focus:border-blue-500"/><button className="w-full bg-blue-600 text-white font-black py-3 rounded-lg hover:bg-blue-700 uppercase tracking-widest cursor-pointer select-none">Login</button></form></div></div>
@@ -68,7 +134,7 @@ function AdminLayout({ u, data, sets, out }) {
   const [view, setView] = useState('dashboard'); const [md, setMd] = useState(null);
   const acc = (s) => u.role === 'admin' || (u.permissions||[]).includes(s);
   const navs = [{i:'dashboard',ic:Home,l:'Dashboard'},{i:'users',ic:Users,l:'Users'},{i:'games',ic:Gamepad2,l:'Games & Modes'},{i:'tournaments',ic:Trophy,l:'Tournaments'},{i:'deposits',ic:ArrowDownLeft,l:'Deposits'},{i:'withdraws',ic:ArrowUpRight,l:'Withdraws'},{i:'messages',ic:Bell,l:'Messages'},{i:'staff',ic:ShieldAlert,l:'Staff'},{i:'deviceBans',ic:ShieldAlert,l:'Device Bans'},{i:'settings',ic:Settings,l:'Settings'}];
-  
+
   const vMap = {
     dashboard: <Dash d={data} s={sets}/>, users: <UserMgr d={data} md={setMd} s={sets}/>, games: <GamesMgr d={data} md={setMd} u={u}/>, tournaments: <TourneyMgr d={data} md={setMd} u={u} s={sets}/>,
     deposits: <FinMgr t="deposit" d={data} md={setMd} s={sets}/>, withdraws: <FinMgr t="withdraw" d={data} md={setMd} s={sets}/>, messages: <MessageMgr d={data} md={setMd}/>, staff: <StaffMgr d={data} md={setMd} u={u}/>, deviceBans: <DeviceBanMgr d={data} md={setMd}/>, settings: <SetMgr s={sets} md={setMd}/>
@@ -85,7 +151,7 @@ function AdminLayout({ u, data, sets, out }) {
 
 function UniModal({ m, sm }) {
   const [i1, s1]=useState(m.d1||''); const [i2, s2]=useState(m.d2||''); const [i3, s3]=useState(m.d3||''); const [i4, s4]=useState(m.d4||''); const [i5, s5]=useState(m.d5||[]); const [prm, setP] = useState(m.dp||{dashboard:1,users:0,games:0,tournaments:0,finance:0});
-  
+
   const toggleUserSelection = (uid) => {
     s5(prev => prev.includes(uid) ? prev.filter(id => id !== uid) : [...prev, uid]);
   };
@@ -93,7 +159,7 @@ function UniModal({ m, sm }) {
   return (
     <div className="fixed inset-0 bg-slate-900/80 z-50 flex items-center justify-center p-4"><div className="bg-white rounded-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95"><div className={`p-4 font-black uppercase text-white ${m.t==='err'?'bg-rose-500':m.t==='confirm'?'bg-amber-500':'bg-blue-600'}`}>{m.title}</div><div className="p-6 space-y-4 font-medium text-slate-700">{m.msg&&<p>{m.msg}</p>}
       {m.t==='estats'&&<div className="grid grid-cols-2 gap-4"><div><label className="text-[10px] font-black uppercase text-slate-400">Total Bal</label><input type="number" value={i1} onChange={e=>s1(e.target.value)} className="w-full p-2 border rounded font-black outline-none"/></div><div><label className="text-[10px] font-black uppercase text-slate-400">Win Bal</label><input type="number" value={i5} onChange={e=>s5(e.target.value)} className="w-full p-2 border rounded font-black outline-none"/></div><div><label className="text-[10px] font-black uppercase text-slate-400">Total Wins</label><input type="number" value={i2} onChange={e=>s2(e.target.value)} className="w-full p-2 border rounded font-black outline-none"/></div><div><label className="text-[10px] font-black uppercase text-slate-400">Kills</label><input type="number" value={i3} onChange={e=>s3(e.target.value)} className="w-full p-2 border rounded font-black outline-none"/></div><div><label className="text-[10px] font-black uppercase text-slate-400">Refs</label><input type="number" value={i4} onChange={e=>s4(e.target.value)} className="w-full p-2 border rounded font-black outline-none"/></div></div>}
-      
+
       {m.t==='message'&&<div className="space-y-3">
         <select value={i3||'all'} onChange={e=>s3(e.target.value)} className="w-full p-3 border rounded-lg font-bold outline-none cursor-pointer">
           <option value="all">Broadcast to All Users</option>
@@ -133,9 +199,27 @@ function Dash({ d, s }) {
   const w_t = Math.abs(ttx.filter(x=>x.type.includes('withdraw')).reduce((a,c)=>a+Number(c.amount),0));
   const w_a = Math.abs(atx.filter(x=>x.type.includes('withdraw')).reduce((a,c)=>a+Number(c.amount),0));
   const p_d = d.transactions.filter(t=>t.type==='deposit_pending'&&t.status==='pending').length;
-  
+
+  // FIX: Show how many users have FCM tokens registered (push-ready)
+  const pushReady = d.users.filter(u => u.role === 'user' && u.fcmToken).length;
+  const totalUsers = d.users.filter(u => u.role === 'user').length;
+
   const bx = (l, tv, av, c) => <div className="bg-white p-6 rounded-2xl border shadow-sm"><div className="text-sm font-black uppercase text-slate-400 mb-4">{l}</div><div className="grid grid-cols-2 gap-2"><div className="border-r pr-2"><div className="text-[10px] font-bold text-slate-400 uppercase">Today</div><div className={`text-2xl font-black ${c}`}>{tv}</div></div><div><div className="text-[10px] font-bold text-slate-400 uppercase">All Time</div><div className={`text-2xl font-black ${c}`}>{av}</div></div></div></div>;
-  return <div className="space-y-6"><div className="grid md:grid-cols-3 gap-4">{bx("Registered Users", d.users.filter(u=>u.joinedDate&&u.joinedDate.startsWith(td)&&u.role==='user').length, d.users.filter(u=>u.role==='user').length, "text-blue-600")} {bx("Deposits", d_t, d_a, "text-emerald-600")} {bx("Withdraws", w_t, w_a, "text-rose-600")}</div><div className="bg-amber-50 p-6 rounded-2xl border border-amber-200 flex justify-between"><div className="font-black text-amber-800"><div className="text-xs uppercase tracking-widest text-amber-600">Pending Deposits</div><div className="text-3xl mt-1">{p_d} Actions Required</div></div><Clock className="w-12 h-12 text-amber-500 opacity-50"/></div></div>;
+  return <div className="space-y-6">
+    <div className="grid md:grid-cols-3 gap-4">{bx("Registered Users", d.users.filter(u=>u.joinedDate&&u.joinedDate.startsWith(td)&&u.role==='user').length, d.users.filter(u=>u.role==='user').length, "text-blue-600")} {bx("Deposits", d_t, d_a, "text-emerald-600")} {bx("Withdraws", w_t, w_a, "text-rose-600")}</div>
+    <div className="grid md:grid-cols-2 gap-4">
+      <div className="bg-amber-50 p-6 rounded-2xl border border-amber-200 flex justify-between"><div className="font-black text-amber-800"><div className="text-xs uppercase tracking-widest text-amber-600">Pending Deposits</div><div className="text-3xl mt-1">{p_d} Actions Required</div></div><Clock className="w-12 h-12 text-amber-500 opacity-50"/></div>
+      {/* FIX: FCM push-ready counter so admin knows how many users will receive background pushes */}
+      <div className={`p-6 rounded-2xl border flex justify-between ${pushReady === totalUsers ? 'bg-emerald-50 border-emerald-200' : 'bg-orange-50 border-orange-200'}`}>
+        <div className={`font-black ${pushReady === totalUsers ? 'text-emerald-800' : 'text-orange-800'}`}>
+          <div className={`text-xs uppercase tracking-widest ${pushReady === totalUsers ? 'text-emerald-600' : 'text-orange-600'}`}>Push Notification Ready</div>
+          <div className="text-3xl mt-1">{pushReady} / {totalUsers} Users</div>
+          <div className="text-xs mt-1 font-medium opacity-70">Have FCM tokens registered</div>
+        </div>
+        <Bell className={`w-12 h-12 opacity-50 ${pushReady === totalUsers ? 'text-emerald-500' : 'text-orange-500'}`}/>
+      </div>
+    </div>
+  </div>;
 }
 
 function UserMgr({ d, md, s }) {
@@ -150,12 +234,15 @@ function UserMgr({ d, md, s }) {
     if (filterType === 'rooted') return u.isRooted;
     return true;
   }).sort((a,b)=>{if(srt==='joinedDate')return new Date(b.joinedDate)-new Date(a.joinedDate); return (Number(b[srt])||0)-(Number(a[srt])||0);});
-  
+
   if (su) {
     const inv = d.users.filter(u=>u.referredBy===su.uid).sort((a,b)=>(Number(b.totalWinnings)||0)-(Number(a.totalWinnings)||0));
     return (
       <div className="bg-white p-6 rounded-2xl border shadow-sm animate-in slide-in-from-right-8"><button onClick={()=>setSu(null)} className="mb-4 bg-slate-100 px-4 py-2 rounded-lg font-bold text-xs uppercase cursor-pointer">Back</button><div className="grid md:grid-cols-2 gap-6">
-        <div><h3 className="font-black text-xl mb-4">Profile</h3><div className="bg-slate-50 p-5 rounded-xl border space-y-3"><div><div className="text-[10px] font-bold text-slate-400 uppercase">Name & IGN</div><div className="font-black text-lg">{su.name} <span className="text-blue-600 text-sm">({su.gameName||'N/A'})</span></div></div><div><div className="text-[10px] font-bold text-slate-400 uppercase">UID & Email</div><div className="font-mono font-bold text-sm">{su.gameUid || su.uid} | {su.email}</div></div><div><div className="text-[10px] font-bold text-slate-400 uppercase">Password</div><div className="flex gap-2 items-center font-mono font-bold bg-white p-2 rounded border w-max">{sp?su.password:'••••••••'} <button onClick={()=>setSp(!sp)} className="text-blue-600 text-xs ml-2 underline cursor-pointer">{sp?'Hide':'Show'}</button></div></div></div><div className="mt-4 flex gap-2"><button onClick={async ()=>{ try { await updateDoc(doc(db,'artifacts',appId,'public','data','users',su.uid),{isBanned:!su.isBanned}); md({t:'alert',title:'Success',msg:`User ${su.isBanned ? 'unbanned' : 'banned'} successfully`}); } catch(err){ md({t:'err',title:'Error',msg:err.message}); } }} className={`flex-1 py-3 rounded-lg font-black uppercase text-xs text-white cursor-pointer ${su.isBanned?'bg-emerald-500':'bg-rose-500'}`}>{su.isBanned?'Unban':'Ban'} User</button><button onClick={()=>{deleteDoc(doc(db,'artifacts',appId,'public','data','users',su.uid)); setSu(null);}} className="flex-1 py-3 rounded-lg font-black uppercase text-xs bg-rose-100 text-rose-700 cursor-pointer">Delete</button></div>
+        <div><h3 className="font-black text-xl mb-4">Profile</h3><div className="bg-slate-50 p-5 rounded-xl border space-y-3"><div><div className="text-[10px] font-bold text-slate-400 uppercase">Name & IGN</div><div className="font-black text-lg">{su.name} <span className="text-blue-600 text-sm">({su.gameName||'N/A'})</span></div></div><div><div className="text-[10px] font-bold text-slate-400 uppercase">UID & Email</div><div className="font-mono font-bold text-sm">{su.gameUid || su.uid} | {su.email}</div></div><div><div className="text-[10px] font-bold text-slate-400 uppercase">Password</div><div className="flex gap-2 items-center font-mono font-bold bg-white p-2 rounded border w-max">{sp?su.password:'••••••••'} <button onClick={()=>setSp(!sp)} className="text-blue-600 text-xs ml-2 underline cursor-pointer">{sp?'Hide':'Show'}</button></div></div>
+          {/* FIX: Show FCM token status per user */}
+          <div><div className="text-[10px] font-bold text-slate-400 uppercase">Push Notifications</div><div className={`text-xs font-black px-2 py-1 rounded w-max ${su.fcmToken ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-600'}`}>{su.fcmToken ? '✓ FCM Token Registered' : '✗ No FCM Token (won\'t get push)'}</div></div>
+        </div><div className="mt-4 flex gap-2"><button onClick={async ()=>{ try { await updateDoc(doc(db,'artifacts',appId,'public','data','users',su.uid),{isBanned:!su.isBanned}); md({t:'alert',title:'Success',msg:`User ${su.isBanned ? 'unbanned' : 'banned'} successfully`}); } catch(err){ md({t:'err',title:'Error',msg:err.message}); } }} className={`flex-1 py-3 rounded-lg font-black uppercase text-xs text-white cursor-pointer ${su.isBanned?'bg-emerald-500':'bg-rose-500'}`}>{su.isBanned?'Unban':'Ban'} User</button><button onClick={()=>{deleteDoc(doc(db,'artifacts',appId,'public','data','users',su.uid)); setSu(null);}} className="flex-1 py-3 rounded-lg font-black uppercase text-xs bg-rose-100 text-rose-700 cursor-pointer">Delete</button></div>
         <button onClick={async ()=>{ if(!su.deviceId) return md({t:'err',title:'Error',msg:"No device ID recorded for this user yet. User must log in first."}); try { await setDoc(doc(db,'artifacts',appId,'public','data','bannedDevices',su.uid),{deviceId:su.deviceId, bannedAt:new Date().toISOString()}); md({t:'alert',title:'Success',msg:'Hardware Device Banned Successfully'}); } catch(err){ md({t:'err',title:'Error',msg:err.message}); } }} className="w-full mt-2 py-3 rounded-lg font-black uppercase text-xs bg-slate-900 text-white cursor-pointer hover:bg-slate-800 transition-colors">Ban Hardware Device</button>
         </div>
         <div><div className="flex justify-between items-center mb-4"><h3 className="font-black text-xl">Stats</h3><button onClick={()=>md({t:'estats',title:'Edit Stats',d1:su.balance,d2:su.totalWinnings,d3:su.totalKills,d4:su.totalRefers,d5:su.winningBalance,onC:(b,w,k,r,wb)=>{updateDoc(doc(db,'artifacts',appId,'public','data','users',su.uid),{balance:Number(b),winningBalance:Number(wb),totalWinnings:Number(w),totalKills:Number(k),totalRefers:Number(r)}); setSu({...su,balance:Number(b),winningBalance:Number(wb),totalWinnings:Number(w),totalKills:Number(k),totalRefers:Number(r)});}})} className="bg-slate-900 text-white px-3 py-1.5 rounded text-xs font-bold uppercase cursor-pointer"><Edit className="w-3 h-3 inline"/> Edit</button></div><div className="grid grid-cols-2 gap-3 mb-6"><div className="bg-emerald-50 p-3 rounded-lg border border-emerald-100"><div className="text-[10px] font-black uppercase text-emerald-700">Balance</div><div className="text-2xl font-black text-emerald-600">{su.balance}</div></div><div className="bg-purple-50 p-3 rounded-lg border border-purple-100"><div className="text-[10px] font-black uppercase text-purple-700">Winnings</div><div className="text-2xl font-black text-purple-600">{su.totalWinnings||0}</div></div><div className="bg-blue-50 p-3 rounded-lg border border-blue-100"><div className="text-[10px] font-black uppercase text-blue-700">Kills</div><div className="text-2xl font-black text-blue-600">{su.totalKills||0}</div></div><div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100"><div className="text-[10px] font-black uppercase text-indigo-700">Refers</div><div className="text-2xl font-black text-indigo-600">{su.totalRefers||0}</div></div></div><div className="bg-slate-50 border rounded-xl p-4"><h4 className="font-black text-xs uppercase mb-3">Invited Users ({inv.length})</h4><div className="max-h-40 overflow-y-auto space-y-2">{inv.map(i=><div key={i.uid} className="bg-white p-2 border rounded flex justify-between items-center"><div className="font-bold text-sm">{i.name} <span className="text-[9px] text-slate-400 block">{fDate(i.joinedDate)}</span></div><div className="text-emerald-600 font-black text-sm">{i.totalWinnings||0} {s.currencySymbol}</div></div>)}</div></div></div>
@@ -174,40 +261,19 @@ function UserMgr({ d, md, s }) {
       </select>
       <select value={srt} onChange={e=>setSrt(e.target.value)} className="p-2 border rounded-lg font-bold text-sm uppercase text-slate-600 outline-none cursor-pointer"><option value="joinedDate">Date Joined</option><option value="totalKills">Kills</option><option value="totalWinnings">Earned</option><option value="totalRefers">Refers</option><option value="balance">Balance</option></select>
     </div>
-    <div className="flex-1 overflow-auto"><table className="w-full text-left text-sm"><thead className="bg-slate-100 text-[10px] font-black uppercase text-slate-500 sticky top-0 z-10"><tr><th className="p-4">User</th><th className="p-4">Game Info</th><th className="p-4">Stats</th><th className="p-4">Status</th></tr></thead><tbody className="divide-y">{f.map(u=><tr key={u.uid} onClick={()=>setSu(u)} className="hover:bg-blue-50 cursor-pointer transition-colors"><td className="p-4"><div className="font-black text-base">{u.name}</div><div className="text-[10px] font-bold text-slate-400">{u.email}</div></td><td className="p-4"><div className="font-bold text-blue-600">{u.gameName||'N/A'}</div><div className="text-[10px] font-mono">{u.gameUid || u.uid}</div></td><td className="p-4 font-black text-xs space-x-2"><span className="text-emerald-600">{u.balance}B</span><span className="text-blue-600">{u.totalKills||0}K</span><span className="text-purple-600">{u.totalWinnings||0}W</span></td><td className="p-4">{u.isBanned?<span className="bg-rose-100 text-rose-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Banned</span>:<span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Active</span>}{u.isRooted && <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded text-[9px] font-black uppercase">Rooted</span>}</td></tr>)}</tbody></table></div></div>;
+    <div className="flex-1 overflow-auto"><table className="w-full text-left text-sm"><thead className="bg-slate-100 text-[10px] font-black uppercase text-slate-500 sticky top-0 z-10"><tr><th className="p-4">User</th><th className="p-4">Game Info</th><th className="p-4">Stats</th><th className="p-4">Status</th></tr></thead><tbody className="divide-y">{f.map(u=><tr key={u.uid} onClick={()=>setSu(u)} className="hover:bg-blue-50 cursor-pointer transition-colors"><td className="p-4"><div className="font-black text-base">{u.name}</div><div className="text-[10px] font-bold text-slate-400">{u.email}</div></td><td className="p-4"><div className="font-bold text-blue-600">{u.gameName||'N/A'}</div><div className="text-[10px] font-mono">{u.gameUid || u.uid}</div></td><td className="p-4 font-black text-xs space-x-2"><span className="text-emerald-600">{u.balance}B</span><span className="text-blue-600">{u.totalKills||0}K</span><span className="text-purple-600">{u.totalWinnings||0}W</span></td><td className="p-4">{u.isBanned?<span className="bg-rose-100 text-rose-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Banned</span>:<span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Active</span>}{u.isRooted && <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Rooted</span>}{!u.fcmToken && <span className="bg-slate-100 text-slate-500 px-2 py-1 rounded text-[9px] font-black uppercase">No Push</span>}</td></tr>)}</tbody></table></div></div>;
 }
 
 function DeviceBanMgr({ d, md }) {
   return (
     <div className="bg-white p-6 rounded-2xl border">
-      <h2 className="text-xl font-black uppercase mb-6">
-         Banned Devices
-      </h2>
+      <h2 className="text-xl font-black uppercase mb-6">Banned Devices</h2>
       <div className="space-y-3">
         {d.bannedDevices.length === 0 && <div className="text-slate-500 font-bold p-6 bg-slate-50 text-center rounded-xl">No banned devices found.</div>}
         {d.bannedDevices.map(b => (
           <div key={b.id} className="p-4 border rounded-xl flex justify-between items-center">
-            <div>
-              <div className="font-black">
-                 {b.deviceId}
-              </div>
-              <div className="text-xs text-slate-400">
-                 {fDate(b.bannedAt)}
-              </div>
-            </div>
-            <button
-              onClick={async () => {
-                try {
-                  await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bannedDevices', b.id));
-                  md({t:'alert',title:'Success',msg:'Device unbanned successfully'});
-                } catch (err) {
-                  md({t:'err',title:'Error',msg:err.message});
-                }
-              }}
-              className="bg-emerald-100 text-emerald-700 px-4 py-2 rounded-lg font-black text-xs cursor-pointer"
-            >
-              UNBAN
-            </button>
+            <div><div className="font-black">{b.deviceId}</div><div className="text-xs text-slate-400">{fDate(b.bannedAt)}</div></div>
+            <button onClick={async () => { try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bannedDevices', b.id)); md({t:'alert',title:'Success',msg:'Device unbanned successfully'}); } catch (err) { md({t:'err',title:'Error',msg:err.message}); } }} className="bg-emerald-100 text-emerald-700 px-4 py-2 rounded-lg font-black text-xs cursor-pointer">UNBAN</button>
           </div>
         ))}
       </div>
@@ -226,26 +292,27 @@ function MessageMgr({ d, md }) {
           if(!title || !body) return;
           if(targetType === 'specific' && (!targetUids || targetUids.length === 0)) return md({t:'err', title:'Error', msg:'Please select at least one user.'});
           try {
-            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'messages'), { 
-              title, 
-              body, 
-              createdAt: new Date().toISOString(), 
+            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'messages'), {
+              title,
+              body,
+              createdAt: new Date().toISOString(),
               readBy: [],
               targetUids: targetType === 'specific' ? targetUids : ['all']
             });
-            
-            // Send FCM Push via Backend
-            await fetch('https://esports-tournament-app-beta.vercel.app/api/sendNotification', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ 
-                title, 
-                body, 
-                targetUids: targetType === 'specific' ? targetUids : ['all'] 
-              })
-            }).catch(e => console.error("API Ping Failed:", e));
+
+            // FIX: Use centralised sender with proper FCM token lookup + error surfacing
+            await sendPushNotification({
+              title,
+              body,
+              targetUids: targetType === 'specific' ? targetUids : ['all'],
+              users: d.users,
+            });
+
             md({t:'alert', title:'Success', msg:'Message pushed successfully'});
-          } catch(e) { md({t:'err', title:'Error', msg:e.message}); }
+          } catch(e) {
+            // FIX: Surface the actual error to the admin instead of silent .catch
+            md({t:'err', title:'Notification Error', msg:e.message});
+          }
         }})} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-black text-xs uppercase cursor-pointer"><Plus className="w-4 h-4 inline"/> Create</button>
       </div>
       <div className="bg-white rounded-2xl border overflow-hidden">
@@ -283,50 +350,46 @@ function MessageMgr({ d, md }) {
 }
 
 function GamesMgr({ d, md, u }) {
-  return <div className="space-y-6"><div className="flex justify-between items-center bg-white p-6 rounded-2xl border"><h2 className="font-black text-xl uppercase">Games & Modes</h2><div className="flex gap-2"><button onClick={()=>md({t:'mode',title:'Add Mode',gl:d.games,onC:(g,n,b)=>{if(g&&n)addDoc(collection(db,'artifacts',appId,'public','data','modes'),{gameId:g,name:n,bannerUrl:b,createdBy:u.name})}})} className="bg-indigo-100 text-indigo-700 px-4 py-2 rounded-lg font-black text-xs uppercase cursor-pointer">Add Mode</button><button onClick={()=>md({t:'game',title:'Add Game',onC:(n,b)=>{if(n)addDoc(collection(db,'artifacts',appId,'public','data','games'),{name:n,bannerUrl:b,createdBy:u.name})}})} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-black text-xs uppercase cursor-pointer">Add Game</button></div></div><div className="grid md:grid-cols-2 gap-6">{d.games.map(g=><div key={g.id} className="bg-white rounded-2xl border overflow-hidden"><div className="h-32 bg-slate-900 relative">{g.bannerUrl?<img src={g.bannerUrl} className="w-full h-full object-cover opacity-60"/>:<Gamepad2 className="m-auto mt-8 text-white/20 w-12 h-12"/>}<div className="absolute bottom-2 left-4 text-white font-black text-2xl uppercase">{g.name}</div><div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-[8px] font-bold text-white uppercase">By: {g.createdBy||'Admin'}</div><button onClick={()=>{
-    const hasModes = d.modes.some(m => m.gameId === g.id);
-    if (hasModes) return md({t: 'err', title: 'Cannot Delete', msg: 'Please delete all modes inside this game first.'});
-    md({t: 'confirm', title: 'Delete Game', msg: `Are you sure you want to delete ${g.name}?`, onC: () => deleteDoc(doc(db,'artifacts',appId,'public','data','games',g.id))})
-  }} className="absolute top-2 right-2 p-1.5 bg-rose-500 rounded text-white cursor-pointer hover:bg-rose-600 transition-colors"><Trash2 className="w-4 h-4"/></button></div><div className="p-4 bg-slate-50 space-y-2">{d.modes.filter(m=>m.gameId===g.id).map(m=><div key={m.id} className="bg-white p-3 rounded-xl border shadow-sm flex justify-between items-center"><div className="font-bold text-sm uppercase">{m.name} <span className="text-[9px] text-slate-400 block normal-case">By: {m.createdBy||'Admin'}</span></div><button onClick={()=>md({t: 'confirm', title: 'Delete Mode', msg: `Delete ${m.name}?`, onC: () => deleteDoc(doc(db,'artifacts',appId,'public','data','modes',m.id))})} className="text-rose-500 cursor-pointer p-2 hover:bg-rose-50 rounded"><Trash2 className="w-4 h-4"/></button></div>)}</div></div>)}</div></div>;
+  return <div className="space-y-6"><div className="flex justify-between items-center bg-white p-6 rounded-2xl border"><h2 className="font-black text-xl uppercase">Games & Modes</h2><div className="flex gap-2"><button onClick={()=>md({t:'mode',title:'Add Mode',gl:d.games,onC:(g,n,b)=>{if(g&&n)addDoc(collection(db,'artifacts',appId,'public','data','modes'),{gameId:g,name:n,bannerUrl:b,createdBy:u.name})}})} className="bg-indigo-100 text-indigo-700 px-4 py-2 rounded-lg font-black text-xs uppercase cursor-pointer">Add Mode</button><button onClick={()=>md({t:'game',title:'Add Game',onC:(n,b)=>{if(n)addDoc(collection(db,'artifacts',appId,'public','data','games'),{name:n,bannerUrl:b,createdBy:u.name})}})} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-black text-xs uppercase cursor-pointer">Add Game</button></div></div><div className="grid md:grid-cols-2 gap-6">{d.games.map(g=><div key={g.id} className="bg-white rounded-2xl border overflow-hidden"><div className="h-32 bg-slate-900 relative">{g.bannerUrl?<img src={g.bannerUrl} className="w-full h-full object-cover opacity-60"/>:<Gamepad2 className="m-auto mt-8 text-white/20 w-12 h-12"/>}<div className="absolute bottom-2 left-4 text-white font-black text-2xl uppercase">{g.name}</div><div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-[8px] font-bold text-white uppercase">By: {g.createdBy||'Admin'}</div><button onClick={()=>{const hasModes = d.modes.some(m => m.gameId === g.id); if (hasModes) return md({t: 'err', title: 'Cannot Delete', msg: 'Please delete all modes inside this game first.'}); md({t: 'confirm', title: 'Delete Game', msg: `Are you sure you want to delete ${g.name}?`, onC: () => deleteDoc(doc(db,'artifacts',appId,'public','data','games',g.id))})}} className="absolute top-2 right-2 p-1.5 bg-rose-500 rounded text-white cursor-pointer hover:bg-rose-600 transition-colors"><Trash2 className="w-4 h-4"/></button></div><div className="p-4 bg-slate-50 space-y-2">{d.modes.filter(m=>m.gameId===g.id).map(m=><div key={m.id} className="bg-white p-3 rounded-xl border shadow-sm flex justify-between items-center"><div className="font-bold text-sm uppercase">{m.name} <span className="text-[9px] text-slate-400 block normal-case">By: {m.createdBy||'Admin'}</span></div><button onClick={()=>md({t: 'confirm', title: 'Delete Mode', msg: `Delete ${m.name}?`, onC: () => deleteDoc(doc(db,'artifacts',appId,'public','data','modes',m.id))})} className="text-rose-500 cursor-pointer p-2 hover:bg-rose-50 rounded"><Trash2 className="w-4 h-4"/></button></div>)}</div></div>)}</div></div>;
 }
 
 function TourneyMgr({ d, md, u, s }) {
   const [fo, setFo] = useState(false); const [fd, setFd] = useState({gameId:'',modeId:'',title:'',bannerUrl:'',customText:'',dateTime:'',type:'solo',perKill:0,entryFee:0,totalSlots:48,status:'upcoming'}); const [tb, setTb] = useState('active');
   const [isPublishing, setIsPublishing] = useState(false);
-  const sv = async (e) => { 
-    e.preventDefault(); 
-    if(!fd.modeId)return; 
+  const sv = async (e) => {
+    e.preventDefault();
+    if(!fd.modeId)return;
     try {
-      await addDoc(collection(db,'artifacts',appId,'public','data','tournaments'),{...fd,joinedUsers:[],results:[],createdBy:u.name}); 
-      setFo(false); 
+      await addDoc(collection(db,'artifacts',appId,'public','data','tournaments'),{...fd,joinedUsers:[],results:[],createdBy:u.name});
+      setFo(false);
       md({t:'alert',title:'Success',msg:'Updated successfully'});
     } catch(err) {
       md({t:'err',title:'Error',msg:err.message});
     }
   };
-  
-  const st = (t, ns) => { 
-    if(ns==='cancelled'){ 
-      if(t.status === 'cancelled') return; 
+
+  const st = (t, ns) => {
+    if(ns==='cancelled'){
+      if(t.status === 'cancelled') return;
       md({
         t:'confirm',title:'Cancel Match?',msg:'This moves to History and refunds players.',
-        onC:async ()=>{ 
+        onC:async ()=>{
           try {
-            await Promise.all((t.joinedUsers||[]).map(async ju=>{ 
-              const uid = ju.uid || ju; 
-              const uu = d.users.find(x=>x.uid===uid); 
-              if(uu) { 
-                await updateDoc(doc(db,'artifacts',appId,'public','data','users',uid), { balance: Number(uu.balance||0)+Number(t.entryFee), depositBalance: Number(uu.depositBalance||0)+Number(t.entryFee) }); 
-                await addDoc(collection(db,'artifacts',appId,'public','data','transactions'),{uid,type:'refund',amount:t.entryFee,description:`Refund: ${t.title}`,status:'completed',date:new Date().toISOString()}); 
+            await Promise.all((t.joinedUsers||[]).map(async ju=>{
+              const uid = ju.uid || ju;
+              const uu = d.users.find(x=>x.uid===uid);
+              if(uu) {
+                await updateDoc(doc(db,'artifacts',appId,'public','data','users',uid), { balance: Number(uu.balance||0)+Number(t.entryFee), depositBalance: Number(uu.depositBalance||0)+Number(t.entryFee) });
+                await addDoc(collection(db,'artifacts',appId,'public','data','transactions'),{uid,type:'refund',amount:t.entryFee,description:`Refund: ${t.title}`,status:'completed',date:new Date().toISOString()});
               }
-            })); 
-            await updateDoc(doc(db,'artifacts',appId,'public','data','tournaments',t.id),{status:ns}); 
+            }));
+            await updateDoc(doc(db,'artifacts',appId,'public','data','tournaments',t.id),{status:ns});
             md({t:'alert',title:'Success',msg:'Updated successfully'});
           } catch (err) {
             md({t:'err',title:'Error',msg:err.message});
           }
         }
-      }); 
+      });
     } else {
       try {
         updateDoc(doc(db,'artifacts',appId,'public','data','tournaments',t.id),{status:ns});
@@ -334,42 +397,42 @@ function TourneyMgr({ d, md, u, s }) {
       } catch(err) {
         md({t:'err',title:'Error',msg:err.message});
       }
-    } 
+    }
   };
-  
+
   const [rt, setRt] = useState(null); const [rd, setRd] = useState({}); const [rn, setRn] = useState('');
   const oR = (t) => { const o={}; (t.joinedUsers||[]).forEach(ju=>{const id = ju.uid || ju; o[id]={gameName:d.users.find(x=>x.uid===id)?.gameName||'Player', kills:0, earned:0, uid:id}}); setRd(o); setRn(t.customText||''); setRt(t); };
-  const sR = () => { 
-    const a=Object.values(rd); 
+  const sR = () => {
+    const a=Object.values(rd);
     md({
       t:'confirm',title:'Publish Results?',msg:`Pay ${a.filter(x=>x.earned>0).length} winners?`,
-      onC:async ()=>{ 
-        setIsPublishing(true); 
+      onC:async ()=>{
+        setIsPublishing(true);
         try {
-          await updateDoc(doc(db,'artifacts',appId,'public','data','tournaments',rt.id),{status:'result',results:a,customText:rn}); 
+          await updateDoc(doc(db,'artifacts',appId,'public','data','tournaments',rt.id),{status:'result',results:a,customText:rn});
           await Promise.all(a.map(async r=>{
             if(r.earned>0||r.kills>0){
-              const xu=d.users.find(x=>x.uid===r.uid); 
-              const up={}; 
+              const xu=d.users.find(x=>x.uid===r.uid);
+              const up={};
               if(r.earned>0){
-                up.balance=Number(xu.balance||0)+Number(r.earned); 
-                up.winningBalance=Number(xu.winningBalance||0)+Number(r.earned); 
-                up.totalWinnings=Number(xu.totalWinnings||0)+Number(r.earned); 
+                up.balance=Number(xu.balance||0)+Number(r.earned);
+                up.winningBalance=Number(xu.winningBalance||0)+Number(r.earned);
+                up.totalWinnings=Number(xu.totalWinnings||0)+Number(r.earned);
                 await addDoc(collection(db,'artifacts',appId,'public','data','transactions'),{uid:r.uid,type:'winnings',amount:r.earned,description:`Won: ${rt.title}`,status:'completed',date:new Date().toISOString()});
-              } 
-              if(r.kills>0) up.totalKills=Number(xu.totalKills||0)+Number(r.kills); 
-              await updateDoc(doc(db,'artifacts',appId,'public','data','users',r.uid),up); 
+              }
+              if(r.kills>0) up.totalKills=Number(xu.totalKills||0)+Number(r.kills);
+              await updateDoc(doc(db,'artifacts',appId,'public','data','users',r.uid),up);
             }
-          })); 
-          setRt(null); 
+          }));
+          setRt(null);
           md({t:'alert',title:'Success',msg:'Updated successfully'});
         } catch(err) {
           md({t:'err',title:'Error',msg:err.message});
         } finally {
-          setIsPublishing(false); 
+          setIsPublishing(false);
         }
       }
-    }); 
+    });
   };
 
   if(rt) return <div className="bg-white p-6 rounded-2xl border"><div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-black uppercase">Results: {rt.title}</h2><div className="flex gap-2"><button disabled={isPublishing} onClick={()=>setRt(null)} className="px-4 py-2 bg-slate-100 font-bold rounded-lg cursor-pointer disabled:opacity-50">Cancel</button><button disabled={isPublishing} onClick={sR} className="px-4 py-2 bg-emerald-600 text-white font-black rounded-lg uppercase cursor-pointer disabled:opacity-50">{isPublishing ? 'Publishing...' : 'Publish'}</button></div></div><textarea value={rn} onChange={e=>setRn(e.target.value)} placeholder="Custom instructions/notes for this match..." className="w-full p-3 border rounded-lg mb-4 outline-none font-bold"/><table className="w-full text-sm text-left"><thead className="bg-slate-100 text-[10px] uppercase font-black"><tr><th className="p-3">Player</th><th className="p-3 text-center">Kills</th><th className="p-3 text-right">Earned</th></tr></thead><tbody>{Object.values(rd).map(r=><tr key={r.uid}><td className="p-3 font-bold uppercase">{r.gameName}</td><td className="p-3 text-center"><input type="number" min="0" value={r.kills} onChange={e=>setRd({...rd,[r.uid]:{...r,kills:Number(e.target.value)}})} className="w-20 p-2 border rounded font-black text-center outline-none"/></td><td className="p-3 text-right"><input type="number" min="0" value={r.earned} onChange={e=>setRd({...rd,[r.uid]:{...r,earned:Number(e.target.value)}})} className="w-24 p-2 border border-emerald-300 bg-emerald-50 text-emerald-700 rounded font-black text-right outline-none"/></td></tr>)}</tbody></table></div>;
@@ -379,53 +442,79 @@ function TourneyMgr({ d, md, u, s }) {
     <div className="bg-white rounded-2xl border overflow-hidden"><div className="flex bg-slate-50 border-b"><button onClick={()=>setTb('active')} className={`flex-1 py-4 font-black uppercase text-xs cursor-pointer ${tb==='active'?'text-blue-600 border-b-2 border-blue-600':'text-slate-500'}`}>Active</button><button onClick={()=>setTb('history')} className={`flex-1 py-4 font-black uppercase text-xs cursor-pointer ${tb==='history'?'text-emerald-600 border-b-2 border-emerald-600':'text-slate-500'}`}>History</button></div><div className="divide-y">
       {d.tournaments.filter(t=>tb==='active'?t.status!=='result'&&t.status!=='cancelled':(t.status==='result'||t.status==='cancelled')).sort((a,b)=>new Date(b.dateTime)-new Date(a.dateTime)).map(t=>{
         if(tb==='history') return <details key={t.id} className="p-5 bg-white group cursor-pointer"><summary className="list-none font-black text-lg uppercase outline-none flex justify-between items-center"><div className="flex items-center gap-3">{t.status==='cancelled'?<XCircle className="text-rose-500 w-5 h-5"/>:<Trophy className="text-emerald-500 w-5 h-5"/>}{t.title}</div><div className="flex gap-4"><button onClick={()=>md({t:'confirm',title:'Delete Match',msg:'Delete completely from history?',onC:async ()=>{ try { await deleteDoc(doc(db,'artifacts',appId,'public','data','tournaments',t.id)); md({t:'alert',title:'Success',msg:'Updated successfully'}); } catch(err){ md({t:'err',title:'Error',msg:err.message}); } }})} className="text-rose-500 bg-rose-50 p-2 rounded cursor-pointer"><Trash2 className="w-4 h-4"/></button><ChevronRight className="w-5 h-5 text-slate-400 group-open:rotate-90 m-auto"/></div></summary><div className="pt-4 mt-4 border-t space-y-4 cursor-default"><div className="flex gap-4"><div className="bg-slate-50 p-3 rounded border flex-1"><div className="text-[10px] font-black text-slate-400 uppercase">Room ID</div><div className="font-mono font-bold text-lg">{t.roomId||'N/A'}</div></div><div className="bg-slate-50 p-3 rounded border flex-1"><div className="text-[10px] font-black text-slate-400 uppercase">Pass</div><div className="font-mono font-bold text-lg">{t.password||'N/A'}</div></div></div><div className="bg-blue-50 p-3 rounded border border-blue-100 text-sm font-bold">{t.customText||'No custom text.'}</div>{t.status==='result'&&<div className="border rounded-xl overflow-hidden"><table className="w-full text-sm text-left"><thead className="bg-slate-100 text-[10px] uppercase font-black"><tr><th className="p-3">Player</th><th className="p-3">Kills</th><th className="p-3">Earned</th></tr></thead><tbody>{(t.results||[]).map(r=><tr key={r.uid}><td className="p-3 font-bold uppercase">{r.gameName}</td><td className="p-3 font-bold">{r.kills}</td><td className="p-3 font-black text-emerald-600">{r.earned}</td></tr>)}</tbody></table></div>}</div></details>;
-        return <div key={t.id} className="p-5 flex flex-col md:flex-row justify-between items-center gap-4"><div className="flex items-center gap-4"><div className="w-20 h-20 bg-slate-900 rounded-xl relative overflow-hidden">{t.bannerUrl?<img src={t.bannerUrl} className="w-full h-full object-cover opacity-80"/>:<Trophy className="m-auto mt-6 text-white/30"/>}{t.createdBy&&<span className="absolute bottom-1 left-1 bg-black/66 text-white text-[8px] px-1 rounded uppercase font-bold">By: {t.createdBy}</span>}</div><div><div className="font-black text-xl uppercase mb-1">{t.title} <span className="text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-500">{t.status}</span></div><div className="text-[10px] font-bold text-slate-500 uppercase">{fDate(t.dateTime)} | Fee: {t.entryFee} | PK: {t.perKill} | Joined: {(t.joinedUsers||[]).length}/{t.totalSlots}</div></div></div><div className="flex gap-2 flex-wrap bg-slate-50 p-2 rounded-xl border">{t.status==='upcoming'&&<><button onClick={()=>md({t:'room',title:'Set Room & Start',onC: async (r,p)=>{
-           if(!r || !p){ alert('Room ID and Password required!'); return; } 
-           try {
-             await updateDoc(doc(db,'artifacts',appId,'public','data','tournaments',t.id),{roomId:r,password:p,status:'ongoing'});
-             
-             // --- FIREBASE CLOUD MESSAGING (FCM) NOTIFICATION PAYLOAD ---
-             // Formatted with Room ID besides Password, with values below
-             const notifBody = `Room ID          Password\n${r}          ${p}\n\nMatch: ${t.title}\nTime: ${fDate(t.dateTime)}`;
-             
-             // Extract target users (only those who joined)
-             const targetUids = (t.joinedUsers||[]).map(ju => ju.uid || ju);
-             
-             if (targetUids.length > 0) {
-               await fetch('https://esports-tournament-app-beta.vercel.app/api/sendNotification', {
-                 method: 'POST',
-                 headers: { 'Content-Type': 'application/json' },
-                 body: JSON.stringify({ 
-                   title: "🎮 Match Room is LIVE!", 
-                   body: notifBody,
-                   targetUids: targetUids,
-                   data: { roomId: String(r), password: String(p) }
-                 })
-               }).catch(e => console.error("Notification ping failed", e));
-             }
-             
-             md({t:'alert',title:'Success',msg:'Room Updated & Push Notification Sent!'});
-           } catch(err) { md({t:'err',title:'Error',msg:err.message}); }
-        }})} className="px-4 py-2 bg-amber-500 text-white font-black text-[10px] uppercase rounded-lg cursor-pointer">START</button></>}{t.status==='ongoing'&&<button onClick={()=>oR(t)} className="px-4 py-2 bg-emerald-600 text-white font-black text-[10px] uppercase rounded-lg cursor-pointer">RESULTS</button>}{(t.status==='upcoming'||t.status==='ongoing')&&<button onClick={()=>st(t,'cancelled')} className="px-4 py-2 bg-white text-rose-500 border font-black text-[10px] uppercase rounded-lg cursor-pointer">CANCEL</button>}</div>
-        
-        {/* JOINED USERS LIST WITH TIMESTAMP */}
-        <div className="w-full mt-4 bg-slate-50 p-3 rounded-lg border text-xs">
-           <div className="font-black text-slate-400 uppercase mb-2">Joined Players ({(t.joinedUsers||[]).length})</div>
-           <div className="max-h-32 overflow-y-auto space-y-1">
-             {(t.joinedUsers||[]).map((ju, i) => {
-               const uid = ju.uid || ju;
-               const joinedAt = ju.joinedAt;
-               const uName = d.users.find(x=>x.uid===uid)?.name || 'Player';
-               return (
-                 <div key={i} className="flex justify-between items-center bg-white p-2 border rounded">
-                   <div className="font-bold uppercase">{uName}</div>
-                   {joinedAt && <div className="text-[9px] text-slate-400 font-bold uppercase">{fDate(joinedAt)}</div>}
-                 </div>
-               )
-             })}
-           </div>
+        return <div key={t.id} className="p-5 flex flex-col md:flex-row justify-between items-center gap-4"><div className="flex items-center gap-4"><div className="w-20 h-20 bg-slate-900 rounded-xl relative overflow-hidden">{t.bannerUrl?<img src={t.bannerUrl} className="w-full h-full object-cover opacity-80"/>:<Trophy className="m-auto mt-6 text-white/30"/>}{t.createdBy&&<span className="absolute bottom-1 left-1 bg-black/66 text-white text-[8px] px-1 rounded uppercase font-bold">By: {t.createdBy}</span>}</div><div><div className="font-black text-xl uppercase mb-1">{t.title} <span className="text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-500">{t.status}</span></div><div className="text-[10px] font-bold text-slate-500 uppercase">{fDate(t.dateTime)} | Fee: {t.entryFee} | PK: {t.perKill} | Joined: {(t.joinedUsers||[]).length}/{t.totalSlots}</div></div></div>
+        <div className="flex gap-2 flex-wrap bg-slate-50 p-2 rounded-xl border">
+          {t.status==='upcoming'&&<>
+            <button onClick={()=>md({t:'room',title:'Set Room & Start',onC: async (r,p)=>{
+              if(!r || !p){ alert('Room ID and Password required!'); return; }
+              try {
+                await updateDoc(doc(db,'artifacts',appId,'public','data','tournaments',t.id),{roomId:r,password:p,status:'ongoing'});
+
+                const targetUids = (t.joinedUsers||[]).map(ju => ju.uid || ju);
+
+                if (targetUids.length > 0) {
+                  // ─────────────────────────────────────────────────
+                  // FIX 2: Notification body — short, clean, no ASCII
+                  // alignment tricks that break on small screens.
+                  // The structured `data` payload carries roomId and
+                  // password separately so the mobile app can show
+                  // tap-to-copy buttons when the notification is opened.
+                  // ─────────────────────────────────────────────────
+                  const notifTitle = `🎮 ${t.title} — Room is LIVE!`;
+                  const notifBody  = `Room ID: ${r}\nPassword: ${p}`;
+
+                  await sendPushNotification({
+                    title: notifTitle,
+                    body:  notifBody,
+                    targetUids,
+                    users: d.users,
+                    data: {
+                      // FIX: These keys land in the FCM `data` map.
+                      // The Flutter app reads notification.data['roomId']
+                      // and notification.data['password'] to show copy buttons.
+                      type:       'room_live',
+                      roomId:     String(r),
+                      password:   String(p),
+                      matchTitle: String(t.title),
+                      matchId:    String(t.id),
+                    },
+                  });
+                }
+
+                md({t:'alert',title:'Success',msg:'Room updated & push notification sent!'});
+              } catch(err) {
+                // FIX: Show the real error so the admin can debug
+                md({t:'err',title:'Error',msg:err.message});
+              }
+            }})} className="px-4 py-2 bg-amber-500 text-white font-black text-[10px] uppercase rounded-lg cursor-pointer">START</button>
+          </>}
+          {t.status==='ongoing'&&<button onClick={()=>oR(t)} className="px-4 py-2 bg-emerald-600 text-white font-black text-[10px] uppercase rounded-lg cursor-pointer">RESULTS</button>}
+          {(t.status==='upcoming'||t.status==='ongoing')&&<button onClick={()=>st(t,'cancelled')} className="px-4 py-2 bg-white text-rose-500 border font-black text-[10px] uppercase rounded-lg cursor-pointer">CANCEL</button>}
         </div>
-        
+
+        <div className="w-full mt-4 bg-slate-50 p-3 rounded-lg border text-xs">
+          <div className="font-black text-slate-400 uppercase mb-2">Joined Players ({(t.joinedUsers||[]).length})</div>
+          <div className="max-h-32 overflow-y-auto space-y-1">
+            {(t.joinedUsers||[]).map((ju, i) => {
+              const uid = ju.uid || ju;
+              const joinedAt = ju.joinedAt;
+              const uData = d.users.find(x=>x.uid===uid);
+              const uName = uData?.name || 'Player';
+              // FIX: Show push-ready indicator per player in joined list
+              const hasFcm = !!uData?.fcmToken;
+              return (
+                <div key={i} className="flex justify-between items-center bg-white p-2 border rounded">
+                  <div className="font-bold uppercase flex items-center gap-2">
+                    {uName}
+                    {!hasFcm && <span title="No FCM token — won't get push" className="text-[8px] bg-orange-100 text-orange-600 px-1 rounded font-black">NO PUSH</span>}
+                  </div>
+                  {joinedAt && <div className="text-[9px] text-slate-400 font-bold uppercase">{fDate(joinedAt)}</div>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         </div>;
       })}
     </div></div>
@@ -434,45 +523,45 @@ function TourneyMgr({ d, md, u, s }) {
 
 function FinMgr({ t, d, md, s }) {
   const p = d.transactions.filter(x=> (t==='withdraw' ? (x.type==='withdraw_pending' || x.type==='referral_withdraw_pending') : x.type===`${t}_pending`) && x.status==='pending');
-  
+
   const act = (tx, st) => md({
     t:'confirm',title:'Confirm',msg:`${st} request?`,
-    onC:async ()=>{ 
+    onC:async ()=>{
       try {
         if(st==='approve') {
-           if(t==='deposit') {
+          if(t==='deposit') {
+            const uu = d.users.find(x=>x.uid===tx.uid);
+            if (uu) {
+              await updateDoc(doc(db,'artifacts',appId,'public','data','users',tx.uid), {
+                balance: Number(uu.balance || 0) + Number(tx.amount),
+                depositBalance: Number(uu.depositBalance || 0) + Number(tx.amount)
+              });
+            }
+            if (uu && uu.referredBy && s.referralBonusPercent > 0) {
+              const refUser = d.users.find(x=>x.uid===uu.referredBy);
+              if (refUser) {
+                const bonus = (Number(tx.amount) * Number(s.referralBonusPercent)) / 100;
+                await updateDoc(doc(db,'artifacts',appId,'public','data','users',refUser.uid), { referralBalance: Number(refUser.referralBalance||0) + bonus });
+              }
+            }
+          }
+          await updateDoc(doc(db,'artifacts',appId,'public','data','transactions',tx.id),{status:'completed'});
+        } else {
+          if(t==='withdraw') {
+            if (tx.type==='referral_withdraw_pending') {
+              const uu = d.users.find(x=>x.uid===tx.uid);
+              if(uu) await updateDoc(doc(db,'artifacts',appId,'public','data','users',tx.uid), { referralBalance: Number(uu.referralBalance||0) + Math.abs(tx.amount) });
+            } else {
               const uu = d.users.find(x=>x.uid===tx.uid);
               if (uu) {
-                 await updateDoc(doc(db,'artifacts',appId,'public','data','users',tx.uid), {
-                    balance: Number(uu.balance || 0) + Number(tx.amount),
-                    depositBalance: Number(uu.depositBalance || 0) + Number(tx.amount)
-                 });
+                await updateDoc(doc(db,'artifacts',appId,'public','data','users',tx.uid), {
+                  balance: Number(uu.balance || 0) + Math.abs(tx.amount),
+                  winningBalance: Number(uu.winningBalance || 0) + Math.abs(tx.amount)
+                });
               }
-              if (uu && uu.referredBy && s.referralBonusPercent > 0) {
-                 const refUser = d.users.find(x=>x.uid===uu.referredBy);
-                 if (refUser) {
-                    const bonus = (Number(tx.amount) * Number(s.referralBonusPercent)) / 100;
-                    await updateDoc(doc(db,'artifacts',appId,'public','data','users',refUser.uid), { referralBalance: Number(refUser.referralBalance||0) + bonus });
-                 }
-              }
-           }
-           await updateDoc(doc(db,'artifacts',appId,'public','data','transactions',tx.id),{status:'completed'});
-        } else {
-           if(t==='withdraw') {
-              if (tx.type==='referral_withdraw_pending') {
-                 const uu = d.users.find(x=>x.uid===tx.uid);
-                 if(uu) await updateDoc(doc(db,'artifacts',appId,'public','data','users',tx.uid), { referralBalance: Number(uu.referralBalance||0) + Math.abs(tx.amount) });
-              } else {
-                 const uu = d.users.find(x=>x.uid===tx.uid);
-                 if (uu) {
-                    await updateDoc(doc(db,'artifacts',appId,'public','data','users',tx.uid), {
-                       balance: Number(uu.balance || 0) + Math.abs(tx.amount),
-                       winningBalance: Number(uu.winningBalance || 0) + Math.abs(tx.amount)
-                    });
-                 }
-              }
-           }
-           await updateDoc(doc(db,'artifacts',appId,'public','data','transactions',tx.id),{status:'failed'});
+            }
+          }
+          await updateDoc(doc(db,'artifacts',appId,'public','data','transactions',tx.id),{status:'failed'});
         }
         md({t:'alert',title:'Success',msg:'Updated successfully'});
       } catch(err) {
@@ -497,16 +586,16 @@ function StaffMgr({ d, md, u }) {
 
 function SetMgr({ s, md }) {
   const [ls, sls] = useState(s || {}); const [sv, setSv] = useState(false);
-  
-  const save = async () => { 
-    setSv(true); 
-    try { 
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global'), ls, { merge: true }); 
-      md({t:'alert',title:'Success',msg:'Updated successfully'}); 
-    } catch (e) { 
-      md({t:'err',title:'Error',msg:e.message}); 
-    } 
-    setSv(false); 
+
+  const save = async () => {
+    setSv(true);
+    try {
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global'), ls, { merge: true });
+      md({t:'alert',title:'Success',msg:'Updated successfully'});
+    } catch (e) {
+      md({t:'err',title:'Error',msg:e.message});
+    }
+    setSv(false);
   };
   return <div className="bg-white p-6 rounded-2xl border space-y-6"><div className="flex justify-between border-b pb-4"><h2 className="text-xl font-black uppercase">Settings</h2><button onClick={save} disabled={sv} className="px-6 py-2 bg-blue-600 text-white font-black rounded-lg uppercase cursor-pointer">{sv?'Saving...':'Save'}</button></div><div className="grid md:grid-cols-2 gap-6"><div className="bg-slate-50 p-4 rounded-xl border"><label className="text-[10px] font-black uppercase text-slate-400 block mb-2">App Name</label><input value={ls.appName||''} onChange={e=>sls({...ls,appName:e.target.value})} className="w-full p-3 border rounded font-bold outline-none"/></div><div className="bg-slate-50 p-4 rounded-xl border"><label className="text-[10px] font-black uppercase text-slate-400 block mb-2">Currency Name</label><input value={ls.currencyName||''} onChange={e=>sls({...ls,currencyName:e.target.value})} className="w-full p-3 border rounded font-bold outline-none"/></div><div className="bg-slate-50 p-4 rounded-xl border"><label className="text-[10px] font-black uppercase text-slate-400 block mb-2">Min Withdraw</label><input type="number" value={ls.minWithdraw||0} onChange={e=>sls({...ls,minWithdraw:Number(e.target.value)})} className="w-full p-3 border rounded font-bold outline-none"/></div><div className="bg-slate-50 p-4 rounded-xl border"><label className="text-[10px] font-black uppercase text-slate-400 block mb-2">Referral Bonus %</label><input type="number" value={ls.referralBonusPercent||0} onChange={e=>sls({...ls,referralBonusPercent:Number(e.target.value)})} className="w-full p-3 border rounded font-bold outline-none"/></div>
   <div className="bg-slate-50 p-4 rounded-xl border col-span-full"><label className="text-[10px] font-black uppercase text-slate-400 block mb-2">UPI ID</label><input value={ls.upiId||''} onChange={e=>sls({...ls,upiId:e.target.value})} placeholder="example@okicici" className="w-full p-3 border rounded font-bold outline-none"/></div>
