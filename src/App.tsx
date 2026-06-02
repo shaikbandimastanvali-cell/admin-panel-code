@@ -4,7 +4,7 @@ import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged }
 import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, addDoc, deleteDoc } from 'firebase/firestore';
 import { Home, Trophy, User as UIcon, Wallet, Settings, LogOut, Users, Gamepad2, Plus, Edit, Trash2, Check, X, Search, Menu, ShieldAlert, Clock, ArrowUpRight, ArrowDownLeft, Info, PlayCircle, ChevronRight, CheckCircle2, Loader2, Link as LinkIcon, XCircle, Bell } from 'lucide-react';
 
-// --- EXACT SAME FIREBASE CONFIG AS USER PANEL ---
+// --- FIREBASE CONFIG ---
 const firebaseConfig = {
   apiKey: "AIzaSyB1WhNWUsZ2CmZHMa_7DpP4_vx_AnN9g2E",
   authDomain: "ff-tournament-app-bd64e.firebaseapp.com",
@@ -17,7 +17,6 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// STRICTLY HARDCODED TO MAINTAIN CONNECTION WITH USER PANEL
 const appId = 'ff-tournament-live-db'; 
 
 const fDate = (d) => {
@@ -85,7 +84,12 @@ function AdminLayout({ u, data, sets, out }) {
 }
 
 function UniModal({ m, sm }) {
-  const [i1, s1]=useState(m.d1||''); const [i2, s2]=useState(m.d2||''); const [i3, s3]=useState(m.d3||''); const [i4, s4]=useState(m.d4||''); const [i5, s5]=useState(m.d5||''); const [prm, setP] = useState(m.dp||{dashboard:1,users:0,games:0,tournaments:0,finance:0});
+  const [i1, s1]=useState(m.d1||''); const [i2, s2]=useState(m.d2||''); const [i3, s3]=useState(m.d3||''); const [i4, s4]=useState(m.d4||''); const [i5, s5]=useState(m.d5||[]); const [prm, setP] = useState(m.dp||{dashboard:1,users:0,games:0,tournaments:0,finance:0});
+  
+  const toggleUserSelection = (uid) => {
+    s5(prev => prev.includes(uid) ? prev.filter(id => id !== uid) : [...prev, uid]);
+  };
+
   return (
     <div className="fixed inset-0 bg-slate-900/80 z-50 flex items-center justify-center p-4"><div className="bg-white rounded-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95"><div className={`p-4 font-black uppercase text-white ${m.t==='err'?'bg-rose-500':m.t==='confirm'?'bg-amber-500':'bg-blue-600'}`}>{m.title}</div><div className="p-6 space-y-4 font-medium text-slate-700">{m.msg&&<p>{m.msg}</p>}
       {m.t==='estats'&&<div className="grid grid-cols-2 gap-4"><div><label className="text-[10px] font-black uppercase text-slate-400">Total Bal</label><input type="number" value={i1} onChange={e=>s1(e.target.value)} className="w-full p-2 border rounded font-black outline-none"/></div><div><label className="text-[10px] font-black uppercase text-slate-400">Win Bal</label><input type="number" value={i5} onChange={e=>s5(e.target.value)} className="w-full p-2 border rounded font-black outline-none"/></div><div><label className="text-[10px] font-black uppercase text-slate-400">Total Wins</label><input type="number" value={i2} onChange={e=>s2(e.target.value)} className="w-full p-2 border rounded font-black outline-none"/></div><div><label className="text-[10px] font-black uppercase text-slate-400">Kills</label><input type="number" value={i3} onChange={e=>s3(e.target.value)} className="w-full p-2 border rounded font-black outline-none"/></div><div><label className="text-[10px] font-black uppercase text-slate-400">Refs</label><input type="number" value={i4} onChange={e=>s4(e.target.value)} className="w-full p-2 border rounded font-black outline-none"/></div></div>}
@@ -93,18 +97,20 @@ function UniModal({ m, sm }) {
       {m.t==='message'&&<div className="space-y-3">
         <select value={i3||'all'} onChange={e=>s3(e.target.value)} className="w-full p-3 border rounded-lg font-bold outline-none cursor-pointer">
           <option value="all">Broadcast to All Users</option>
-          <option value="specific">Send to Specific User</option>
+          <option value="specific">Send to Specific Users</option>
         </select>
-        {i3 === 'specific' && <input type="text" placeholder="Search Email or UID..." value={i4} onChange={e=>{s4(e.target.value); s5('');}} className="w-full p-3 border rounded-lg font-bold outline-none border-blue-300"/>}
+        {i3 === 'specific' && <input type="text" placeholder="Search Email, Name, or UID..." value={i4} onChange={e=>{s4(e.target.value);}} className="w-full p-3 border rounded-lg font-bold outline-none border-blue-300"/>}
         {i3 === 'specific' && i4.length > 0 && (
           <div className="max-h-32 overflow-y-auto border rounded-lg bg-slate-50 p-2 text-xs space-y-1 shadow-inner">
             {m.ul.filter(u => u.email?.toLowerCase().includes(i4.toLowerCase()) || u.uid?.includes(i4) || u.name?.toLowerCase().includes(i4.toLowerCase())).map(u => (
-              <div key={u.uid} onClick={()=>s5(u.uid)} className={`p-2 rounded cursor-pointer font-bold ${i5===u.uid?'bg-blue-500 text-white shadow-sm':'bg-white border hover:bg-blue-50'}`}>
-                {u.name} ({u.email})
+              <div key={u.uid} onClick={()=>toggleUserSelection(u.uid)} className={`p-2 rounded cursor-pointer font-bold flex justify-between items-center ${i5.includes(u.uid)?'bg-blue-500 text-white shadow-sm':'bg-white border hover:bg-blue-50'}`}>
+                <span>{u.name} ({u.email})</span>
+                {i5.includes(u.uid) && <CheckCircle2 className="w-4 h-4 text-white" />}
               </div>
             ))}
           </div>
         )}
+        {i3 === 'specific' && i5.length > 0 && <div className="text-[10px] font-bold text-blue-600 uppercase tracking-widest">{i5.length} Users Selected</div>}
         <input type="text" placeholder="Message Title" value={i1} onChange={e=>s1(e.target.value)} className="w-full p-3 border rounded-lg font-bold outline-none"/>
         <textarea placeholder="Message Body" value={i2} onChange={e=>s2(e.target.value)} className="w-full p-3 border rounded-lg h-32 font-bold outline-none"/>
       </div>}
@@ -150,7 +156,7 @@ function UserMgr({ d, md, s }) {
     return (
       <div className="bg-white p-6 rounded-2xl border shadow-sm animate-in slide-in-from-right-8"><button onClick={()=>setSu(null)} className="mb-4 bg-slate-100 px-4 py-2 rounded-lg font-bold text-xs uppercase cursor-pointer">Back</button><div className="grid md:grid-cols-2 gap-6">
         <div><h3 className="font-black text-xl mb-4">Profile</h3><div className="bg-slate-50 p-5 rounded-xl border space-y-3"><div><div className="text-[10px] font-bold text-slate-400 uppercase">Name & IGN</div><div className="font-black text-lg">{su.name} <span className="text-blue-600 text-sm">({su.gameName||'N/A'})</span></div></div><div><div className="text-[10px] font-bold text-slate-400 uppercase">UID & Email</div><div className="font-mono font-bold text-sm">{su.gameUid || su.uid} | {su.email}</div></div><div><div className="text-[10px] font-bold text-slate-400 uppercase">Password</div><div className="flex gap-2 items-center font-mono font-bold bg-white p-2 rounded border w-max">{sp?su.password:'••••••••'} <button onClick={()=>setSp(!sp)} className="text-blue-600 text-xs ml-2 underline cursor-pointer">{sp?'Hide':'Show'}</button></div></div></div><div className="mt-4 flex gap-2"><button onClick={async ()=>{ try { await updateDoc(doc(db,'artifacts',appId,'public','data','users',su.uid),{isBanned:!su.isBanned}); md({t:'alert',title:'Success',msg:`User ${su.isBanned ? 'unbanned' : 'banned'} successfully`}); } catch(err){ md({t:'err',title:'Error',msg:err.message}); } }} className={`flex-1 py-3 rounded-lg font-black uppercase text-xs text-white cursor-pointer ${su.isBanned?'bg-emerald-500':'bg-rose-500'}`}>{su.isBanned?'Unban':'Ban'} User</button><button onClick={()=>{deleteDoc(doc(db,'artifacts',appId,'public','data','users',su.uid)); setSu(null);}} className="flex-1 py-3 rounded-lg font-black uppercase text-xs bg-rose-100 text-rose-700 cursor-pointer">Delete</button></div>
-        <button onClick={async ()=>{ if(!su.deviceId) return md({t:'err',title:'Error',msg:"No device ID found to ban"}); try { await setDoc(doc(db,'artifacts',appId,'public','data','bannedDevices',su.uid),{deviceId:su.deviceId, bannedAt:new Date().toISOString()}); md({t:'alert',title:'Success',msg:'Device Banned Successfully'}); } catch(err){ md({t:'err',title:'Error',msg:err.message}); } }} className="w-full mt-2 py-3 rounded-lg font-black uppercase text-xs bg-slate-900 text-white cursor-pointer hover:bg-slate-800 transition-colors">Ban Hardware Device</button>
+        <button onClick={async ()=>{ if(!su.deviceId) return md({t:'err',title:'Error',msg:"No device ID recorded for this user yet. User must log in first."}); try { await setDoc(doc(db,'artifacts',appId,'public','data','bannedDevices',su.uid),{deviceId:su.deviceId, bannedAt:new Date().toISOString()}); md({t:'alert',title:'Success',msg:'Hardware Device Banned Successfully'}); } catch(err){ md({t:'err',title:'Error',msg:err.message}); } }} className="w-full mt-2 py-3 rounded-lg font-black uppercase text-xs bg-slate-900 text-white cursor-pointer hover:bg-slate-800 transition-colors">Ban Hardware Device</button>
         </div>
         <div><div className="flex justify-between items-center mb-4"><h3 className="font-black text-xl">Stats</h3><button onClick={()=>md({t:'estats',title:'Edit Stats',d1:su.balance,d2:su.totalWinnings,d3:su.totalKills,d4:su.totalRefers,d5:su.winningBalance,onC:(b,w,k,r,wb)=>{updateDoc(doc(db,'artifacts',appId,'public','data','users',su.uid),{balance:Number(b),winningBalance:Number(wb),totalWinnings:Number(w),totalKills:Number(k),totalRefers:Number(r)}); setSu({...su,balance:Number(b),winningBalance:Number(wb),totalWinnings:Number(w),totalKills:Number(k),totalRefers:Number(r)});}})} className="bg-slate-900 text-white px-3 py-1.5 rounded text-xs font-bold uppercase cursor-pointer"><Edit className="w-3 h-3 inline"/> Edit</button></div><div className="grid grid-cols-2 gap-3 mb-6"><div className="bg-emerald-50 p-3 rounded-lg border border-emerald-100"><div className="text-[10px] font-black uppercase text-emerald-700">Balance</div><div className="text-2xl font-black text-emerald-600">{su.balance}</div></div><div className="bg-purple-50 p-3 rounded-lg border border-purple-100"><div className="text-[10px] font-black uppercase text-purple-700">Winnings</div><div className="text-2xl font-black text-purple-600">{su.totalWinnings||0}</div></div><div className="bg-blue-50 p-3 rounded-lg border border-blue-100"><div className="text-[10px] font-black uppercase text-blue-700">Kills</div><div className="text-2xl font-black text-blue-600">{su.totalKills||0}</div></div><div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100"><div className="text-[10px] font-black uppercase text-indigo-700">Refers</div><div className="text-2xl font-black text-indigo-600">{su.totalRefers||0}</div></div></div><div className="bg-slate-50 border rounded-xl p-4"><h4 className="font-black text-xs uppercase mb-3">Invited Users ({inv.length})</h4><div className="max-h-40 overflow-y-auto space-y-2">{inv.map(i=><div key={i.uid} className="bg-white p-2 border rounded flex justify-between items-center"><div className="font-bold text-sm">{i.name} <span className="text-[9px] text-slate-400 block">{fDate(i.joinedDate)}</span></div><div className="text-emerald-600 font-black text-sm">{i.totalWinnings||0} {s.currencySymbol}</div></div>)}</div></div></div>
       </div></div>
@@ -216,21 +222,27 @@ function MessageMgr({ d, md }) {
     <div className="space-y-6">
       <div className="flex justify-between items-center bg-white p-6 rounded-2xl border">
         <h2 className="text-xl font-black uppercase">Messages & Notifications</h2>
-        <button onClick={() => md({t:'message', title:'New Message', ul: d.users, onC: async (title, body, targetType, searchTxt, targetUid) => {
+        <button onClick={() => md({t:'message', title:'New Message', ul: d.users, onC: async (title, body, targetType, searchTxt, targetUids) => {
           if(!title || !body) return;
-          if(targetType === 'specific' && !targetUid) return md({t:'err', title:'Error', msg:'Please select a specific user.'});
+          if(targetType === 'specific' && (!targetUids || targetUids.length === 0)) return md({t:'err', title:'Error', msg:'Please select at least one user.'});
           try {
             await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'messages'), { 
               title, 
               body, 
               createdAt: new Date().toISOString(), 
               readBy: [],
-              targetUid: targetType === 'specific' ? targetUid : 'all'
+              targetUids: targetType === 'specific' ? targetUids : ['all']
             });
+            
+            // Send FCM Push via Backend
             await fetch('https://esports-tournament-app-beta.vercel.app/api/sendNotification', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ title, body, targetUid: targetType === 'specific' ? targetUid : 'all' })
+              body: JSON.stringify({ 
+                title, 
+                body, 
+                targetUids: targetType === 'specific' ? targetUids : ['all'] 
+              })
             }).catch(e => console.error("API Ping Failed:", e));
             md({t:'alert', title:'Success', msg:'Message pushed successfully'});
           } catch(e) { md({t:'err', title:'Error', msg:e.message}); }
@@ -242,7 +254,7 @@ function MessageMgr({ d, md }) {
           {sorted.map(m => (
             <div key={m.id} className="p-5 hover:bg-slate-50 transition-colors flex justify-between items-start gap-4">
               <div className="flex-1">
-                <div className="font-black text-lg text-slate-800 uppercase">{m.title} {m.targetUid && m.targetUid !== 'all' && <span className="bg-amber-100 text-amber-700 text-[9px] px-2 py-0.5 rounded ml-2 align-middle">PRIVATE MESSAGE</span>}</div>
+                <div className="font-black text-lg text-slate-800 uppercase">{m.title} {m.targetUids && m.targetUids[0] !== 'all' && <span className="bg-amber-100 text-amber-700 text-[9px] px-2 py-0.5 rounded ml-2 align-middle">PRIVATE MESSAGE</span>}</div>
                 <div className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1 mb-2">{fDate(m.createdAt)}</div>
                 <div className="text-sm font-medium text-slate-600 whitespace-pre-wrap">{m.body}</div>
                 <div className="text-[10px] text-blue-500 font-bold uppercase mt-3 tracking-widest">Read by: {(m.readBy || []).length} users</div>
@@ -372,19 +384,27 @@ function TourneyMgr({ d, md, u, s }) {
            try {
              await updateDoc(doc(db,'artifacts',appId,'public','data','tournaments',t.id),{roomId:r,password:p,status:'ongoing'});
              
-             // PING API FOR PUSH NOTIFICATION
-             const notifBody = `Room ID: ${r}\nPassword: ${p}\nMatch: ${t.title}\nTime: ${fDate(t.dateTime)}`;
-             await fetch('https://esports-tournament-app-beta.vercel.app/api/sendNotification', {
-               method: 'POST',
-               headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({ 
-                 title: "🎮 Match Room is LIVE!", 
-                 body: notifBody,
-                 data: { roomId: String(r), password: String(p) }
-               })
-             }).catch(e => console.error("Notification ping failed", e));
+             // --- FIREBASE CLOUD MESSAGING (FCM) NOTIFICATION PAYLOAD ---
+             // Formatted with Room ID besides Password, with values below
+             const notifBody = `Room ID          Password\n${r}          ${p}\n\nMatch: ${t.title}\nTime: ${fDate(t.dateTime)}`;
              
-             md({t:'alert',title:'Success',msg:'Room Updated & Notification Sent!'});
+             // Extract target users (only those who joined)
+             const targetUids = (t.joinedUsers||[]).map(ju => ju.uid || ju);
+             
+             if (targetUids.length > 0) {
+               await fetch('https://esports-tournament-app-beta.vercel.app/api/sendNotification', {
+                 method: 'POST',
+                 headers: { 'Content-Type': 'application/json' },
+                 body: JSON.stringify({ 
+                   title: "🎮 Match Room is LIVE!", 
+                   body: notifBody,
+                   targetUids: targetUids,
+                   data: { roomId: String(r), password: String(p) }
+                 })
+               }).catch(e => console.error("Notification ping failed", e));
+             }
+             
+             md({t:'alert',title:'Success',msg:'Room Updated & Push Notification Sent!'});
            } catch(err) { md({t:'err',title:'Error',msg:err.message}); }
         }})} className="px-4 py-2 bg-amber-500 text-white font-black text-[10px] uppercase rounded-lg cursor-pointer">START</button></>}{t.status==='ongoing'&&<button onClick={()=>oR(t)} className="px-4 py-2 bg-emerald-600 text-white font-black text-[10px] uppercase rounded-lg cursor-pointer">RESULTS</button>}{(t.status==='upcoming'||t.status==='ongoing')&&<button onClick={()=>st(t,'cancelled')} className="px-4 py-2 bg-white text-rose-500 border font-black text-[10px] uppercase rounded-lg cursor-pointer">CANCEL</button>}</div>
         
