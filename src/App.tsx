@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, addDoc, deleteDoc } from 'firebase/firestore';
+import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, addDoc, deleteDoc, enableIndexedDbPersistence } from 'firebase/firestore';
 import { Home, Trophy, User as UIcon, Wallet, Settings, LogOut, Users, Gamepad2, Plus, Edit, Trash2, Check, X, Search, Menu, ShieldAlert, Clock, ArrowUpRight, ArrowDownLeft, Info, PlayCircle, ChevronRight, CheckCircle2, Loader2, Link as LinkIcon, XCircle, Bell } from 'lucide-react';
 
 // --- FIREBASE CONFIG ---
@@ -16,6 +16,19 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+
+// 🔥 OPTIMIZATION: ENABLE OFFLINE CACHE (SAVES MASSIVE READ COSTS) 🔥
+try {
+  enableIndexedDbPersistence(db).catch((err) => {
+    if (err.code === 'failed-precondition') {
+      console.warn('Multiple tabs open, persistence can only be enabled in one open tab at a time.');
+    } else if (err.code === 'unimplemented') {
+      console.warn('The current browser does not support all of the features required to enable persistence');
+    }
+  });
+} catch (e) {
+  console.warn("Persistence catch error:", e);
+}
 
 const appId = 'ff-tournament-live-db';
 
@@ -52,7 +65,7 @@ const sendPushNotification = async ({ title, body, targetUids, data = {}, users 
     title,
     body,
     targetUids,          // keep for backend UID-based lookup as fallback
-    fcmTokens,           // FIX: pass device tokens directly
+    fcmTokens,            // FIX: pass device tokens directly
     data: {              // FIX: structured data payload for in-app copy buttons
       ...data,
       click_action: 'FLUTTER_NOTIFICATION_CLICK',
