@@ -160,6 +160,7 @@ function AdminLayout({ u, data, sets, out }) {
   );
 }
 
+// 🔥 MODAL TIMER LOGIC PRESERVED 🔥
 function UniModal({ m, sm }) {
   const [i1, s1]=useState(m.d1||''); const [i2, s2]=useState(m.d2||''); const [i3, s3]=useState(m.d3||''); const [i4, s4]=useState(m.d4||''); const [i5, s5]=useState(m.d5||[]); 
   const [i6, s6]=useState(m.d6||0); const [i7, s7]=useState(m.d7||0); 
@@ -244,6 +245,7 @@ function Dash({ d, s }) {
   </div>;
 }
 
+// 🔥 FIXED SEARCH BY UID TO FORCE STRINGS 🔥
 function UserMgr({ d, md, s, u: adminUser }) {
   const [q, sq] = useState(''); const [srt, setSrt] = useState('joinedDate'); const [su, setSu] = useState(null); const [sp, setSp] = useState(false);
   const [filterType, setFilterType] = useState('all');
@@ -253,8 +255,14 @@ function UserMgr({ d, md, s, u: adminUser }) {
 
   let f = d.users.filter(u => {
     if (u.role !== 'user') return false;
-    // 🔥 FIXED: SEARCH BY UID CONVERTED TO STRING 🔥
-    if (q && !(u.name?.toLowerCase().includes(q.toLowerCase()) || String(u.uid).toLowerCase().includes(q.toLowerCase()) || u.email?.toLowerCase().includes(q.toLowerCase()))) return false;
+    if (q) {
+      const searchStr = q.toLowerCase();
+      const nMatch = (u.name || '').toLowerCase().includes(searchStr);
+      const eMatch = (u.email || '').toLowerCase().includes(searchStr);
+      const uMatch = String(u.uid || '').toLowerCase().includes(searchStr);
+      const guMatch = String(u.gameUid || '').toLowerCase().includes(searchStr);
+      if (!(nMatch || eMatch || uMatch || guMatch)) return false;
+    }
     if (filterType === 'banned') return u.isBanned;
     if (filterType === 'bannedDevice') return d.bannedDevices.some(b => b.deviceId === u.deviceId);
     if (filterType === 'rooted') return u.isRooted;
@@ -262,7 +270,6 @@ function UserMgr({ d, md, s, u: adminUser }) {
   }).sort((a,b)=>{if(srt==='joinedDate')return new Date(b.joinedDate)-new Date(a.joinedDate); return (Number(b[srt])||0)-(Number(a[srt])||0);});
 
   if (su) {
-    // 🔥 NEW: CALCULATE TOTAL DEPOSITS FOR REFERRED USERS 🔥
     const invWithDeps = d.users.filter(u=>u.referredBy===su.uid).map(i => {
       const deps = d.transactions.filter(tx => tx.uid === i.uid && tx.type.includes('deposit') && tx.status === 'completed').reduce((sum, tx) => sum + Number(tx.amount), 0);
       return { ...i, totalDeposited: deps };
@@ -283,7 +290,6 @@ function UserMgr({ d, md, s, u: adminUser }) {
         </div>
         <div><div className="flex justify-between items-center mb-4"><h3 className="font-black text-xl">Stats</h3><button onClick={()=>md({t:'estats',title:'Edit Stats',d1:su.balance,d2:su.totalWinnings,d3:su.totalKills,d4:su.totalRefers,d5:su.winningBalance,d6:su.totalMatches,d7:su.depositBalance,onC:(b,w,k,r,wb,tm,td)=>{updateDoc(doc(db,'artifacts',appId,'public','data','users',su.uid),{balance:Number(b),winningBalance:Number(wb),totalWinnings:Number(w),totalKills:Number(k),totalRefers:Number(r),totalMatches:Number(tm),depositBalance:Number(td)}); setSu({...su,balance:Number(b),winningBalance:Number(wb),totalWinnings:Number(w),totalKills:Number(k),totalRefers:Number(r),totalMatches:Number(tm),depositBalance:Number(td)});}})} className="bg-slate-900 text-white px-3 py-1.5 rounded text-xs font-bold uppercase cursor-pointer"><Edit className="w-3 h-3 inline"/> Edit</button></div>
         <div className="grid grid-cols-2 gap-3 mb-6"><div className="bg-emerald-50 p-3 rounded-lg border border-emerald-100"><div className="text-[10px] font-black uppercase text-emerald-700">Balance</div><div className="text-2xl font-black text-emerald-600">{su.balance}</div></div><div className="bg-purple-50 p-3 rounded-lg border border-purple-100"><div className="text-[10px] font-black uppercase text-purple-700">Winnings</div><div className="text-2xl font-black text-purple-600">{su.totalWinnings||0}</div></div><div className="bg-blue-50 p-3 rounded-lg border border-blue-100"><div className="text-[10px] font-black uppercase text-blue-700">Kills</div><div className="text-2xl font-black text-blue-600">{su.totalKills||0}</div></div><div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100"><div className="text-[10px] font-black uppercase text-indigo-700">Refers</div><div className="text-2xl font-black text-indigo-600">{su.totalRefers||0}</div></div><div className="bg-slate-100 p-3 rounded-lg border border-slate-200"><div className="text-[10px] font-black uppercase text-slate-700">Total Matches</div><div className="text-2xl font-black text-slate-800">{su.totalMatches||0}</div></div><div className="bg-slate-100 p-3 rounded-lg border border-slate-200"><div className="text-[10px] font-black uppercase text-slate-700">Deposit Bal</div><div className="text-2xl font-black text-slate-800">{su.depositBalance||0}</div></div>
-        {/* 🔥 NEW REFERS DEPOSIT BOX 🔥 */}
         <div className="bg-orange-50 p-3 rounded-lg border border-orange-200 col-span-full"><div className="text-[10px] font-black uppercase text-orange-700">Total Deposited by Referrals</div><div className="text-2xl font-black text-orange-600">{totalDepositedByRefers} {s.currencySymbol}</div></div>
         </div>
         <div className="bg-slate-50 border rounded-xl p-4"><h4 className="font-black text-xs uppercase mb-3">Invited Users ({invWithDeps.length})</h4>
@@ -378,7 +384,6 @@ function MessageMgr({ d, md, u: adminUser }) {
   );
 }
 
-// 🔥 GAMES MGR: ADDED MODE EDITING 🔥
 function GamesMgr({ d, md, u }) {
   return <div className="space-y-6"><div className="flex justify-between items-center bg-white p-6 rounded-2xl border"><h2 className="font-black text-xl uppercase">Games & Modes</h2><div className="flex gap-2">
     <button onClick={()=>md({t:'mode',title:'Add Mode',gl:d.games,onC:(g,n,b,p)=>{if(g&&n)addDoc(collection(db,'artifacts',appId,'public','data','modes'),{gameId:g,name:n,bannerUrl:b,priority:Number(p||0),createdBy:u.name})}})} className="bg-indigo-100 text-indigo-700 px-4 py-2 rounded-lg font-black text-xs uppercase cursor-pointer">Add Mode</button><button onClick={()=>md({t:'game',title:'Add Game',onC:(n,b)=>{if(n)addDoc(collection(db,'artifacts',appId,'public','data','games'),{name:n,bannerUrl:b,createdBy:u.name})}})} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-black text-xs uppercase cursor-pointer">Add Game</button></div></div><div className="grid md:grid-cols-2 gap-6">{d.games.map(g=><div key={g.id} className="bg-white rounded-2xl border overflow-hidden"><div className="h-32 bg-slate-900 relative">{g.bannerUrl?<img src={g.bannerUrl} className="w-full h-full object-cover opacity-60"/>:<Gamepad2 className="m-auto mt-8 text-white/20 w-12 h-12"/>}<div className="absolute bottom-2 left-4 text-white font-black text-2xl uppercase">{g.name}</div><div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-[8px] font-bold text-white uppercase">By: {g.createdBy||'Admin'}</div>
@@ -391,7 +396,6 @@ function GamesMgr({ d, md, u }) {
     </div>)}</div></div>)}</div></div>;
 }
 
-// 🔥 TOURNEY MGR: ADDED EDIT MATCH FORM RE-USE 🔥
 function TourneyMgr({ d, md, u, s }) {
   const [fo, setFo] = useState(false); const [fd, setFd] = useState({gameId:'',modeId:'',title:'',bannerUrl:'',customText:'',dateTime:'',type:'solo',perKill:0,entryFee:0,totalSlots:48,status:'upcoming'}); const [tb, setTb] = useState('active');
   const [isPublishing, setIsPublishing] = useState(false);
@@ -568,7 +572,7 @@ function TourneyMgr({ d, md, u, s }) {
   </div>;
 }
 
-// 🔥 FIN MGR: SAFE DELETION 🔥
+// 🔥 FIN MGR: USER STATS ADDED TO DEPOSIT/WITHDRAW CARDS 🔥
 function FinMgr({ t, d, md, s, u: adminUser }) {
   const [cMsg, setCMsg] = useState('');
   const p = d.transactions.filter(x=> (t==='withdraw' ? (x.type==='withdraw_pending' || x.type==='referral_withdraw_pending') : x.type===`${t}_pending`) && x.status==='pending');
@@ -625,12 +629,56 @@ function FinMgr({ t, d, md, s, u: adminUser }) {
 
   return <div className="bg-white p-6 rounded-2xl border">
   {cMsg && <div className="fixed top-5 left-1/2 -translate-x-1/2 bg-emerald-500 text-white px-4 py-2 rounded-xl z-50 font-black shadow-lg animate-in fade-in zoom-in">{cMsg}</div>}
-  <h2 className="text-xl font-black uppercase mb-6 flex items-center gap-2"><Clock className="text-amber-500"/> Pending {t}s ({p.length})</h2><div className="space-y-4 mb-8">{p.length===0?<div className="p-8 text-center font-bold text-slate-400 bg-slate-50 rounded-xl">All caught up!</div>:p.map(x=>{
+  <h2 className="text-xl font-black uppercase mb-6 flex items-center gap-2"><Clock className="text-amber-500"/> Pending {t}s ({p.length})</h2><div className="space-y-4 mb-8">
+  
+  {p.length===0?<div className="p-8 text-center font-bold text-slate-400 bg-slate-50 rounded-xl">All caught up!</div>:p.map(x=>{
     const upi = x.description?.includes('to ') ? x.description.split('to ')[1] : '';
-    return <div key={x.id} className="p-4 bg-amber-50/50 border border-amber-200 rounded-xl flex justify-between items-center"><div className="flex-1"><div className="font-black text-3xl mb-1">{Math.abs(x.amount)}</div><div className="text-sm font-bold text-blue-600 uppercase">{(d.users.find(u=>u.uid===x.uid)||{}).name} {x.type==='referral_withdraw_pending'&&<span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded text-[9px] ml-2 tracking-widest">REFERRAL WITHDRAW</span>}</div>
-    <div className="text-xs font-bold text-slate-700 mt-1 flex items-center gap-2">{x.description} {upi && <button onClick={()=>cT(upi)} className="bg-blue-100 text-blue-700 p-1 rounded hover:bg-blue-200 cursor-pointer"><Copy className="w-3 h-3"/></button>}</div>
-    <div className="text-[10px] font-bold text-slate-500">{x.description} | {fDate(x.date)}</div></div><div className="flex gap-2"><button onClick={()=>act(x,'reject')} className="px-5 py-3 bg-white text-rose-600 font-black uppercase text-xs rounded-lg border border-rose-200 cursor-pointer">Reject</button><button onClick={()=>act(x,'approve')} className="px-5 py-3 bg-emerald-500 text-white font-black uppercase text-xs rounded-lg cursor-pointer">Approve</button></div></div>
+    const uu = d.users.find(u=>u.uid===x.uid) || {};
+
+    const userTxs = d.transactions.filter(tx => tx.uid === x.uid && !tx.adminDeleted);
+    const compDeps = userTxs.filter(tx => tx.type === 'deposit_pending' && tx.status === 'completed');
+    const totalDepAmt = compDeps.reduce((sum, tx) => sum + Number(tx.amount), 0);
+    const totalDepCount = compDeps.length;
+    const rejDeps = userTxs.filter(tx => tx.type === 'deposit_pending' && tx.status === 'failed').length;
+
+    const compWids = userTxs.filter(tx => (tx.type === 'withdraw_pending' || tx.type === 'referral_withdraw_pending') && tx.status === 'completed');
+    const totalWidAmt = Math.abs(compWids.reduce((sum, tx) => sum + Number(tx.amount), 0));
+    const totalWidCount = compWids.length;
+    const rejWids = userTxs.filter(tx => (tx.type === 'withdraw_pending' || tx.type === 'referral_withdraw_pending') && tx.status === 'failed').length;
+
+    return <div key={x.id} className="p-4 bg-amber-50/50 border border-amber-200 rounded-xl flex justify-between items-start">
+      <div className="flex-1 pr-4">
+        <div className="font-black text-3xl mb-1">{Math.abs(x.amount)}</div>
+        <div className="text-sm font-bold text-blue-600 uppercase">{uu.name || 'Unknown User'} {x.type==='referral_withdraw_pending'&&<span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded text-[9px] ml-2 tracking-widest">REFERRAL WITHDRAW</span>}</div>
+        <div className="text-xs font-bold text-slate-700 mt-1 flex items-center gap-2">{x.description} {upi && <button onClick={()=>cT(upi)} className="bg-blue-100 text-blue-700 p-1 rounded hover:bg-blue-200 cursor-pointer"><Copy className="w-3 h-3"/></button>}</div>
+        <div className="text-[10px] font-bold text-slate-500 mt-1 mb-3">{fDate(x.date)}</div>
+
+        {/* 🔥 NEW DETAILED USER STATS BLOCK 🔥 */}
+        <div className="bg-white/60 border border-amber-200 rounded-lg p-2.5 grid grid-cols-2 gap-2 text-[10px] font-black uppercase tracking-widest text-slate-600">
+          {t === 'deposit' ? (
+             <>
+               <div>Total Deposits: <span className="text-emerald-600">{totalDepCount}</span></div>
+               <div>Total Amount: <span className="text-emerald-600">{totalDepAmt} {s.currencySymbol}</span></div>
+               <div className="col-span-2">Rejected Deposits: <span className="text-rose-600">{rejDeps}</span></div>
+             </>
+          ) : (
+             <>
+               <div>Deps: <span className="text-emerald-600">{totalDepCount} ({totalDepAmt} {s.currencySymbol})</span></div>
+               <div>Wids: <span className="text-blue-600">{totalWidCount} ({totalWidAmt} {s.currencySymbol})</span></div>
+               <div>Rej Deps: <span className="text-rose-600">{rejDeps}</span></div>
+               <div>Rej Wids: <span className="text-rose-600">{rejWids}</span></div>
+               <div className="col-span-2">Games Played: <span className="text-indigo-600">{uu.totalMatches || 0}</span></div>
+             </>
+          )}
+        </div>
+      </div>
+      <div className="flex flex-col gap-2 shrink-0">
+        <button onClick={()=>act(x,'reject')} className="px-5 py-3 bg-white text-rose-600 font-black uppercase text-xs rounded-lg border border-rose-200 cursor-pointer hover:bg-rose-50">Reject</button>
+        <button onClick={()=>act(x,'approve')} className="px-5 py-3 bg-emerald-500 text-white font-black uppercase text-xs rounded-lg cursor-pointer hover:bg-emerald-600">Approve</button>
+      </div>
+    </div>
   })}</div>
+
   <div className="flex justify-between items-center mb-4 border-b pb-2">
     <h3 className="text-sm font-black uppercase tracking-widest text-slate-500">Recent History</h3>
   </div>
