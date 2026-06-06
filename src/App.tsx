@@ -160,7 +160,6 @@ function AdminLayout({ u, data, sets, out }) {
   );
 }
 
-// 🔥 ADDED 5 SEC TIMER LOGIC TO UNIMODAL 🔥
 function UniModal({ m, sm }) {
   const [i1, s1]=useState(m.d1||''); const [i2, s2]=useState(m.d2||''); const [i3, s3]=useState(m.d3||''); const [i4, s4]=useState(m.d4||''); const [i5, s5]=useState(m.d5||[]); 
   const [i6, s6]=useState(m.d6||0); const [i7, s7]=useState(m.d7||0); 
@@ -207,7 +206,6 @@ function UniModal({ m, sm }) {
       </div>}
 
       {m.t==='game'&&<><input type="text" placeholder="Game Name" value={i1} onChange={e=>s1(e.target.value)} className="w-full p-3 border rounded-lg font-bold"/><input type="text" placeholder="Banner URL" value={i2} onChange={e=>s2(e.target.value)} className="w-full p-3 border rounded-lg"/></>}
-      {/* 🔥 ADDED MODE PRIORITY INPUT 🔥 */}
       {m.t==='mode'&&<><select value={i1} onChange={e=>s1(e.target.value)} className="w-full p-3 border rounded-lg font-bold"><option value="">Select Game</option>{m.gl.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}</select><input type="text" placeholder="Mode Name" value={i2} onChange={e=>s2(e.target.value)} className="w-full p-3 border rounded-lg font-bold"/><input type="number" placeholder="Priority Number (e.g. 1, 2, 3)" value={i4} onChange={e=>s4(e.target.value)} className="w-full p-3 border rounded-lg font-bold"/><input type="text" placeholder="Banner URL" value={i3} onChange={e=>s3(e.target.value)} className="w-full p-3 border rounded-lg"/></>}
       {m.t==='room'&&<><input type="text" placeholder="Room ID" value={i1} onChange={e=>s1(e.target.value)} className="w-full p-3 border rounded-lg font-black text-xl"/><input type="text" placeholder="Password" value={i2} onChange={e=>s2(e.target.value)} className="w-full p-3 border rounded-lg font-black text-xl"/></>}
       {m.t==='staff'&&<><input type="email" placeholder="User Email" value={i1} disabled={m.ed} onChange={e=>s1(e.target.value)} className="w-full p-3 border rounded-lg font-bold disabled:bg-slate-100"/><div className="grid grid-cols-2 gap-2">{['dashboard','users','games','tournaments','finance'].map(k=><button key={k} onClick={()=>setP({...prm,[k]:!prm[k]})} className={`p-2 rounded border text-xs font-bold uppercase flex justify-between cursor-pointer ${prm[k]?'bg-blue-50 border-blue-500 text-blue-700':''}`}>{k} {prm[k]&&<CheckCircle2 className="w-4 h-4"/>}</button>)}</div></>}
@@ -246,7 +244,6 @@ function Dash({ d, s }) {
   </div>;
 }
 
-// 🔥 USER MGR: ADDED DELETE ALL USERS (ADMIN ONLY), TAP-TO-COPY FOR UID/EMAIL 🔥
 function UserMgr({ d, md, s, u: adminUser }) {
   const [q, sq] = useState(''); const [srt, setSrt] = useState('joinedDate'); const [su, setSu] = useState(null); const [sp, setSp] = useState(false);
   const [filterType, setFilterType] = useState('all');
@@ -256,7 +253,8 @@ function UserMgr({ d, md, s, u: adminUser }) {
 
   let f = d.users.filter(u => {
     if (u.role !== 'user') return false;
-    if (q && !(u.name?.toLowerCase().includes(q.toLowerCase()) || u.uid.includes(q) || u.email?.toLowerCase().includes(q.toLowerCase()))) return false;
+    // 🔥 FIXED: SEARCH BY UID CONVERTED TO STRING 🔥
+    if (q && !(u.name?.toLowerCase().includes(q.toLowerCase()) || String(u.uid).toLowerCase().includes(q.toLowerCase()) || u.email?.toLowerCase().includes(q.toLowerCase()))) return false;
     if (filterType === 'banned') return u.isBanned;
     if (filterType === 'bannedDevice') return d.bannedDevices.some(b => b.deviceId === u.deviceId);
     if (filterType === 'rooted') return u.isRooted;
@@ -264,7 +262,14 @@ function UserMgr({ d, md, s, u: adminUser }) {
   }).sort((a,b)=>{if(srt==='joinedDate')return new Date(b.joinedDate)-new Date(a.joinedDate); return (Number(b[srt])||0)-(Number(a[srt])||0);});
 
   if (su) {
-    const inv = d.users.filter(u=>u.referredBy===su.uid).sort((a,b)=>(Number(b.totalWinnings)||0)-(Number(a.totalWinnings)||0));
+    // 🔥 NEW: CALCULATE TOTAL DEPOSITS FOR REFERRED USERS 🔥
+    const invWithDeps = d.users.filter(u=>u.referredBy===su.uid).map(i => {
+      const deps = d.transactions.filter(tx => tx.uid === i.uid && tx.type.includes('deposit') && tx.status === 'completed').reduce((sum, tx) => sum + Number(tx.amount), 0);
+      return { ...i, totalDeposited: deps };
+    }).sort((a,b) => b.totalDeposited - a.totalDeposited);
+
+    const totalDepositedByRefers = invWithDeps.reduce((sum, i) => sum + i.totalDeposited, 0);
+
     return (
       <div className="bg-white p-6 rounded-2xl border shadow-sm animate-in slide-in-from-right-8"><button onClick={()=>setSu(null)} className="mb-4 bg-slate-100 px-4 py-2 rounded-lg font-bold text-xs uppercase cursor-pointer">Back</button>
       {cMsg && <div className="fixed top-5 left-1/2 -translate-x-1/2 bg-emerald-500 text-white px-4 py-2 rounded-xl z-50 font-black shadow-lg animate-in fade-in zoom-in">{cMsg}</div>}
@@ -277,8 +282,20 @@ function UserMgr({ d, md, s, u: adminUser }) {
         <button onClick={async ()=>{ if(!su.deviceId) return md({t:'err',title:'Error',msg:"No device ID recorded for this user yet. User must log in first."}); try { await setDoc(doc(db,'artifacts',appId,'public','data','bannedDevices',su.uid),{deviceId:su.deviceId, bannedAt:new Date().toISOString()}); md({t:'alert',title:'Success',msg:'Hardware Device Banned Successfully'}); } catch(err){ md({t:'err',title:'Error',msg:err.message}); } }} className="w-full mt-2 py-3 rounded-lg font-black uppercase text-xs bg-slate-900 text-white cursor-pointer hover:bg-slate-800 transition-colors">Ban Hardware Device</button>
         </div>
         <div><div className="flex justify-between items-center mb-4"><h3 className="font-black text-xl">Stats</h3><button onClick={()=>md({t:'estats',title:'Edit Stats',d1:su.balance,d2:su.totalWinnings,d3:su.totalKills,d4:su.totalRefers,d5:su.winningBalance,d6:su.totalMatches,d7:su.depositBalance,onC:(b,w,k,r,wb,tm,td)=>{updateDoc(doc(db,'artifacts',appId,'public','data','users',su.uid),{balance:Number(b),winningBalance:Number(wb),totalWinnings:Number(w),totalKills:Number(k),totalRefers:Number(r),totalMatches:Number(tm),depositBalance:Number(td)}); setSu({...su,balance:Number(b),winningBalance:Number(wb),totalWinnings:Number(w),totalKills:Number(k),totalRefers:Number(r),totalMatches:Number(tm),depositBalance:Number(td)});}})} className="bg-slate-900 text-white px-3 py-1.5 rounded text-xs font-bold uppercase cursor-pointer"><Edit className="w-3 h-3 inline"/> Edit</button></div>
-        <div className="grid grid-cols-2 gap-3 mb-6"><div className="bg-emerald-50 p-3 rounded-lg border border-emerald-100"><div className="text-[10px] font-black uppercase text-emerald-700">Balance</div><div className="text-2xl font-black text-emerald-600">{su.balance}</div></div><div className="bg-purple-50 p-3 rounded-lg border border-purple-100"><div className="text-[10px] font-black uppercase text-purple-700">Winnings</div><div className="text-2xl font-black text-purple-600">{su.totalWinnings||0}</div></div><div className="bg-blue-50 p-3 rounded-lg border border-blue-100"><div className="text-[10px] font-black uppercase text-blue-700">Kills</div><div className="text-2xl font-black text-blue-600">{su.totalKills||0}</div></div><div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100"><div className="text-[10px] font-black uppercase text-indigo-700">Refers</div><div className="text-2xl font-black text-indigo-600">{su.totalRefers||0}</div></div><div className="bg-slate-100 p-3 rounded-lg border border-slate-200"><div className="text-[10px] font-black uppercase text-slate-700">Total Matches</div><div className="text-2xl font-black text-slate-800">{su.totalMatches||0}</div></div><div className="bg-slate-100 p-3 rounded-lg border border-slate-200"><div className="text-[10px] font-black uppercase text-slate-700">Deposit Bal</div><div className="text-2xl font-black text-slate-800">{su.depositBalance||0}</div></div></div>
-        <div className="bg-slate-50 border rounded-xl p-4"><h4 className="font-black text-xs uppercase mb-3">Invited Users ({inv.length})</h4><div className="max-h-40 overflow-y-auto space-y-2">{inv.map(i=><div key={i.uid} className="bg-white p-2 border rounded flex justify-between items-center"><div className="font-bold text-sm">{i.name} <span className="text-[9px] text-slate-400 block">{fDate(i.joinedDate)}</span></div><div className="text-emerald-600 font-black text-sm">{i.totalWinnings||0} {s.currencySymbol}</div></div>)}</div></div></div>
+        <div className="grid grid-cols-2 gap-3 mb-6"><div className="bg-emerald-50 p-3 rounded-lg border border-emerald-100"><div className="text-[10px] font-black uppercase text-emerald-700">Balance</div><div className="text-2xl font-black text-emerald-600">{su.balance}</div></div><div className="bg-purple-50 p-3 rounded-lg border border-purple-100"><div className="text-[10px] font-black uppercase text-purple-700">Winnings</div><div className="text-2xl font-black text-purple-600">{su.totalWinnings||0}</div></div><div className="bg-blue-50 p-3 rounded-lg border border-blue-100"><div className="text-[10px] font-black uppercase text-blue-700">Kills</div><div className="text-2xl font-black text-blue-600">{su.totalKills||0}</div></div><div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100"><div className="text-[10px] font-black uppercase text-indigo-700">Refers</div><div className="text-2xl font-black text-indigo-600">{su.totalRefers||0}</div></div><div className="bg-slate-100 p-3 rounded-lg border border-slate-200"><div className="text-[10px] font-black uppercase text-slate-700">Total Matches</div><div className="text-2xl font-black text-slate-800">{su.totalMatches||0}</div></div><div className="bg-slate-100 p-3 rounded-lg border border-slate-200"><div className="text-[10px] font-black uppercase text-slate-700">Deposit Bal</div><div className="text-2xl font-black text-slate-800">{su.depositBalance||0}</div></div>
+        {/* 🔥 NEW REFERS DEPOSIT BOX 🔥 */}
+        <div className="bg-orange-50 p-3 rounded-lg border border-orange-200 col-span-full"><div className="text-[10px] font-black uppercase text-orange-700">Total Deposited by Referrals</div><div className="text-2xl font-black text-orange-600">{totalDepositedByRefers} {s.currencySymbol}</div></div>
+        </div>
+        <div className="bg-slate-50 border rounded-xl p-4"><h4 className="font-black text-xs uppercase mb-3">Invited Users ({invWithDeps.length})</h4>
+        <div className="max-h-60 overflow-y-auto space-y-2">
+          {invWithDeps.map(i=>(
+            <div key={i.uid} className="bg-white p-3 border rounded flex flex-col gap-1">
+              <div className="flex justify-between items-center"><div className="font-black text-sm uppercase">{i.name}</div><div className="text-emerald-600 font-black text-xs text-right">Deposited: {i.totalDeposited} {s.currencySymbol}</div></div>
+              <div className="text-[10px] font-bold text-slate-500">{i.email} | UID: {i.gameUid || i.uid}</div>
+              <div className="text-[9px] text-slate-400 font-bold uppercase">Joined: {fDate(i.joinedDate)}</div>
+            </div>
+          ))}
+        </div></div></div>
       </div></div>
     );
   }
@@ -292,14 +309,6 @@ function UserMgr({ d, md, s, u: adminUser }) {
         </select>
         <select value={srt} onChange={e=>setSrt(e.target.value)} className="p-2 border rounded-lg font-bold text-sm uppercase text-slate-600 outline-none cursor-pointer"><option value="joinedDate">Date Joined</option><option value="totalKills">Kills</option><option value="totalWinnings">Earned</option><option value="totalRefers">Refers</option><option value="balance">Balance</option></select>
       </div>
-      {adminUser.role === 'admin' && (
-        <button onClick={() => md({t:'confirm', reqTimer: true, title:'DELETE ALL USERS', msg:'Are you absolute sure? This wipes all users permanently!', onC: async () => {
-          try {
-            f.forEach(x => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', x.id)));
-            md({t:'alert', title:'Success', msg:'All displayed users deleted.'});
-          } catch(e) {}
-        }})} className="px-4 py-2 bg-rose-600 text-white font-black text-xs uppercase rounded-lg">Delete All</button>
-      )}
     </div>
     <div className="flex-1 overflow-auto"><table className="w-full text-left text-sm"><thead className="bg-slate-100 text-[10px] font-black uppercase text-slate-500 sticky top-0 z-10"><tr><th className="p-4">User</th><th className="p-4">Game Info</th><th className="p-4">Stats</th><th className="p-4">Status</th></tr></thead><tbody className="divide-y">{f.map(u=><tr key={u.uid} onClick={()=>setSu(u)} className="hover:bg-blue-50 cursor-pointer transition-colors"><td className="p-4"><div className="font-black text-base">{u.name}</div><div className="text-[10px] font-bold text-slate-400">{u.email}</div></td><td className="p-4"><div className="font-bold text-blue-600">{u.gameName||'N/A'}</div><div className="text-[10px] font-mono">{u.gameUid || u.uid}</div></td><td className="p-4 font-black text-xs space-x-2"><span className="text-emerald-600">{u.balance}B</span><span className="text-blue-600">{u.totalKills||0}K</span><span className="text-purple-600">{u.totalWinnings||0}W</span></td><td className="p-4">{u.isBanned?<span className="bg-rose-100 text-rose-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Banned</span>:<span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Active</span>}{u.isRooted && <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Rooted</span>}{!u.fcmToken && <span className="bg-slate-100 text-slate-500 px-2 py-1 rounded text-[9px] font-black uppercase">No Push</span>}</td></tr>)}</tbody></table></div></div>;
 }
@@ -308,7 +317,6 @@ function DeviceBanMgr({ d, md, u: adminUser }) {
   return (
     <div className="bg-white p-6 rounded-2xl border">
       <h2 className="text-xl font-black uppercase mb-6 flex justify-between items-center">Banned Devices
-      {adminUser.role === 'admin' && <button onClick={()=>md({t:'confirm', reqTimer:true, title:'DELETE ALL', msg:'Clear all device bans?', onC:()=>d.bannedDevices.forEach(x=>deleteDoc(doc(db,'artifacts',appId,'public','data','bannedDevices',x.id)))})} className="px-4 py-2 bg-rose-600 text-white font-black text-xs uppercase rounded-lg">Clear All</button>}
       </h2>
       <div className="space-y-3">
         {d.bannedDevices.length === 0 && <div className="text-slate-500 font-bold p-6 bg-slate-50 text-center rounded-xl">No banned devices found.</div>}
@@ -331,7 +339,6 @@ function MessageMgr({ d, md, u: adminUser }) {
       <div className="flex justify-between items-center bg-white p-6 rounded-2xl border">
         <h2 className="text-xl font-black uppercase">Messages & Notifications</h2>
         <div className="flex gap-2">
-          {adminUser.role === 'admin' && <button onClick={()=>md({t:'confirm', reqTimer:true, title:'DELETE ALL', msg:'Clear all messages?', onC:()=>d.messages.forEach(x=>deleteDoc(doc(db,'artifacts',appId,'public','data','messages',x.id)))})} className="px-4 py-2 bg-rose-600 text-white font-black text-xs uppercase rounded-lg cursor-pointer">Clear All</button>}
           <button onClick={() => md({t:'message', title:'New Message', ul: d.users, onC: async (title, body, targetType, searchTxt, targetUids) => {
             if(!title || !body) return;
             if(targetType === 'specific' && (!targetUids || targetUids.length === 0)) return md({t:'err', title:'Error', msg:'Please select at least one user.'});
@@ -371,26 +378,35 @@ function MessageMgr({ d, md, u: adminUser }) {
   );
 }
 
-// 🔥 GAMES MGR: ADDED MODE PRIORITIES & DELETE ALL 🔥
+// 🔥 GAMES MGR: ADDED MODE EDITING 🔥
 function GamesMgr({ d, md, u }) {
   return <div className="space-y-6"><div className="flex justify-between items-center bg-white p-6 rounded-2xl border"><h2 className="font-black text-xl uppercase">Games & Modes</h2><div className="flex gap-2">
-    {u.role === 'admin' && <button onClick={()=>md({t:'confirm', reqTimer:true, title:'DELETE ALL', msg:'Delete ALL games and modes?', onC:()=>{d.games.forEach(x=>deleteDoc(doc(db,'artifacts',appId,'public','data','games',x.id))); d.modes.forEach(x=>deleteDoc(doc(db,'artifacts',appId,'public','data','modes',x.id)));}})} className="px-4 py-2 bg-rose-600 text-white font-black text-xs uppercase rounded-lg">Wipe All</button>}
     <button onClick={()=>md({t:'mode',title:'Add Mode',gl:d.games,onC:(g,n,b,p)=>{if(g&&n)addDoc(collection(db,'artifacts',appId,'public','data','modes'),{gameId:g,name:n,bannerUrl:b,priority:Number(p||0),createdBy:u.name})}})} className="bg-indigo-100 text-indigo-700 px-4 py-2 rounded-lg font-black text-xs uppercase cursor-pointer">Add Mode</button><button onClick={()=>md({t:'game',title:'Add Game',onC:(n,b)=>{if(n)addDoc(collection(db,'artifacts',appId,'public','data','games'),{name:n,bannerUrl:b,createdBy:u.name})}})} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-black text-xs uppercase cursor-pointer">Add Game</button></div></div><div className="grid md:grid-cols-2 gap-6">{d.games.map(g=><div key={g.id} className="bg-white rounded-2xl border overflow-hidden"><div className="h-32 bg-slate-900 relative">{g.bannerUrl?<img src={g.bannerUrl} className="w-full h-full object-cover opacity-60"/>:<Gamepad2 className="m-auto mt-8 text-white/20 w-12 h-12"/>}<div className="absolute bottom-2 left-4 text-white font-black text-2xl uppercase">{g.name}</div><div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-[8px] font-bold text-white uppercase">By: {g.createdBy||'Admin'}</div>
     {u.role === 'admin' && <button onClick={()=>{const hasModes = d.modes.some(m => m.gameId === g.id); if (hasModes) return md({t: 'err', title: 'Cannot Delete', msg: 'Please delete all modes inside this game first.'}); md({t: 'confirm', title: 'Delete Game', msg: `Are you sure you want to delete ${g.name}?`, onC: () => deleteDoc(doc(db,'artifacts',appId,'public','data','games',g.id))})}} className="absolute top-2 right-2 p-1.5 bg-rose-500 rounded text-white cursor-pointer hover:bg-rose-600 transition-colors"><Trash2 className="w-4 h-4"/></button>}
     </div><div className="p-4 bg-slate-50 space-y-2">{d.modes.filter(m=>m.gameId===g.id).sort((a,b)=>(a.priority||0)-(b.priority||0)).map(m=><div key={m.id} className="bg-white p-3 rounded-xl border shadow-sm flex justify-between items-center"><div className="font-bold text-sm uppercase">{m.name} <span className="text-[9px] text-slate-400 block normal-case">By: {m.createdBy||'Admin'} | Priority: {m.priority||0}</span></div>
-    {u.role === 'admin' && <button onClick={()=>md({t: 'confirm', title: 'Delete Mode', msg: `Delete ${m.name}?`, onC: () => deleteDoc(doc(db,'artifacts',appId,'public','data','modes',m.id))})} className="text-rose-500 cursor-pointer p-2 hover:bg-rose-50 rounded"><Trash2 className="w-4 h-4"/></button>}
+    <div className="flex gap-2">
+      {u.role === 'admin' && <button onClick={()=>md({t:'mode', title:'Edit Mode', gl:d.games, d1:m.gameId, d2:m.name, d3:m.bannerUrl, d4:m.priority, onC:(ga,na,ba,pr)=>{updateDoc(doc(db,'artifacts',appId,'public','data','modes',m.id), {gameId:ga, name:na, bannerUrl:ba, priority:Number(pr||0)})}})} className="text-blue-500 cursor-pointer p-2 hover:bg-blue-50 rounded"><Edit className="w-4 h-4"/></button>}
+      {u.role === 'admin' && <button onClick={()=>md({t: 'confirm', title: 'Delete Mode', msg: `Delete ${m.name}?`, onC: () => deleteDoc(doc(db,'artifacts',appId,'public','data','modes',m.id))})} className="text-rose-500 cursor-pointer p-2 hover:bg-rose-50 rounded"><Trash2 className="w-4 h-4"/></button>}
+    </div>
     </div>)}</div></div>)}</div></div>;
 }
 
-// 🔥 TOURNEY MGR: ADDED DELETE ALL HISTORY 🔥
+// 🔥 TOURNEY MGR: ADDED EDIT MATCH FORM RE-USE 🔥
 function TourneyMgr({ d, md, u, s }) {
   const [fo, setFo] = useState(false); const [fd, setFd] = useState({gameId:'',modeId:'',title:'',bannerUrl:'',customText:'',dateTime:'',type:'solo',perKill:0,entryFee:0,totalSlots:48,status:'upcoming'}); const [tb, setTb] = useState('active');
   const [isPublishing, setIsPublishing] = useState(false);
+  const [editId, setEditId] = useState(null);
+
   const sv = async (e) => {
     e.preventDefault();
     if(!fd.modeId)return;
     try {
-      await addDoc(collection(db,'artifacts',appId,'public','data','tournaments'),{...fd,joinedUsers:[],results:[],createdBy:u.name});
+      if (editId) {
+        await updateDoc(doc(db,'artifacts',appId,'public','data','tournaments',editId), {...fd});
+        setEditId(null);
+      } else {
+        await addDoc(collection(db,'artifacts',appId,'public','data','tournaments'),{...fd,joinedUsers:[],results:[],createdBy:u.name});
+      }
       setFo(false);
       md({t:'alert',title:'Success',msg:'Updated successfully'});
     } catch(err) {
@@ -467,15 +483,14 @@ function TourneyMgr({ d, md, u, s }) {
 
   if(rt) return <div className="bg-white p-6 rounded-2xl border"><div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-black uppercase">Results: {rt.title}</h2><div className="flex gap-2"><button disabled={isPublishing} onClick={()=>setRt(null)} className="px-4 py-2 bg-slate-100 font-bold rounded-lg cursor-pointer disabled:opacity-50">Cancel</button><button disabled={isPublishing} onClick={sR} className="px-4 py-2 bg-emerald-600 text-white font-black rounded-lg uppercase cursor-pointer disabled:opacity-50">{isPublishing ? 'Publishing...' : 'Publish'}</button></div></div><textarea value={rn} onChange={e=>setRn(e.target.value)} placeholder="Custom instructions/notes for this match..." className="w-full p-3 border rounded-lg mb-4 outline-none font-bold"/><table className="w-full text-sm text-left"><thead className="bg-slate-100 text-[10px] uppercase font-black"><tr><th className="p-3">Player</th><th className="p-3 text-center">Kills</th><th className="p-3 text-right">Earned</th></tr></thead><tbody>{Object.values(rd).map(r=><tr key={r.uid}><td className="p-3 font-bold uppercase">{r.gameName}</td><td className="p-3 text-center"><input type="number" min="0" value={r.kills} onChange={e=>setRd({...rd,[r.uid]:{...r,kills:Number(e.target.value)}})} className="w-20 p-2 border rounded font-black text-center outline-none"/></td><td className="p-3 text-right"><input type="number" min="0" value={r.earned} onChange={e=>setRd({...rd,[r.uid]:{...r,earned:Number(e.target.value)}})} className="w-24 p-2 border border-emerald-300 bg-emerald-50 text-emerald-700 rounded font-black text-right outline-none"/></td></tr>)}</tbody></table></div>;
 
-  return <div className="space-y-6"><div className="flex justify-between items-center bg-white p-6 rounded-2xl border"><h2 className="text-xl font-black uppercase">Tournaments</h2><button onClick={()=>setFo(!fo)} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-black text-xs uppercase cursor-pointer"><Plus className="w-4 h-4 inline"/> Create</button></div>
-    {fo&&<form onSubmit={sv} className="bg-white p-6 rounded-2xl border-2 border-blue-200 grid md:grid-cols-2 gap-4"><select required value={fd.gameId} onChange={e=>setFd({...fd,gameId:e.target.value,modeId:''})} className="p-3 border rounded-xl font-bold outline-none cursor-pointer"><option value="">Game...</option>{d.games.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}</select><select required disabled={!fd.gameId} value={fd.modeId} onChange={e=>setFd({...fd,modeId:e.target.value})} className="p-3 border rounded-xl font-bold outline-none cursor-pointer"><option value="">Mode...</option>{d.modes.filter(m=>m.gameId===fd.gameId).map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select><input required type="text" placeholder="Title" value={fd.title} onChange={e=>setFd({...fd,title:e.target.value})} className="p-3 border rounded-xl font-bold"/><input type="datetime-local" required value={fd.dateTime} onChange={e=>setFd({...fd,dateTime:e.target.value})} className="p-3 border rounded-xl font-bold"/><div className="flex gap-2 col-span-full"><input required type="number" placeholder="Fee" value={fd.entryFee} onChange={e=>setFd({...fd,entryFee:Number(e.target.value)})} className="flex-1 p-3 border rounded-xl font-black text-blue-600"/><input required type="number" placeholder="Per Kill" value={fd.perKill} onChange={e=>setFd({...fd,perKill:Number(e.target.value)})} className="flex-1 p-3 border rounded-xl font-black text-emerald-600"/><input required type="number" placeholder="Slots" value={fd.totalSlots} onChange={e=>setFd({...fd,totalSlots:Number(e.target.value)})} className="flex-1 p-3 border rounded-xl font-black"/></div><input type="text" placeholder="Banner URL" value={fd.bannerUrl} onChange={e=>setFd({...fd,bannerUrl:e.target.value})} className="col-span-full p-3 border rounded-xl font-bold"/><textarea value={fd.customText} onChange={e=>setFd({...fd,customText:e.target.value})} placeholder="Custom Instructions/Rules" className="col-span-full p-3 border rounded-xl font-bold outline-none h-24"/><button className="col-span-full py-4 bg-blue-600 text-white font-black rounded-xl uppercase cursor-pointer">Save Match</button></form>}
+  return <div className="space-y-6"><div className="flex justify-between items-center bg-white p-6 rounded-2xl border"><h2 className="text-xl font-black uppercase">Tournaments</h2><button onClick={()=>{setFd({gameId:'',modeId:'',title:'',bannerUrl:'',customText:'',dateTime:'',type:'solo',perKill:0,entryFee:0,totalSlots:48,status:'upcoming'}); setEditId(null); setFo(!fo);}} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-black text-xs uppercase cursor-pointer"><Plus className="w-4 h-4 inline"/> Create</button></div>
+    {fo&&<form onSubmit={sv} className="bg-white p-6 rounded-2xl border-2 border-blue-200 grid md:grid-cols-2 gap-4"><select required value={fd.gameId} onChange={e=>setFd({...fd,gameId:e.target.value,modeId:''})} className="p-3 border rounded-xl font-bold outline-none cursor-pointer"><option value="">Game...</option>{d.games.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}</select><select required disabled={!fd.gameId} value={fd.modeId} onChange={e=>setFd({...fd,modeId:e.target.value})} className="p-3 border rounded-xl font-bold outline-none cursor-pointer"><option value="">Mode...</option>{d.modes.filter(m=>m.gameId===fd.gameId).map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select><input required type="text" placeholder="Title" value={fd.title} onChange={e=>setFd({...fd,title:e.target.value})} className="p-3 border rounded-xl font-bold"/><input type="datetime-local" required value={fd.dateTime} onChange={e=>setFd({...fd,dateTime:e.target.value})} className="p-3 border rounded-xl font-bold"/><div className="flex gap-2 col-span-full"><input required type="number" placeholder="Fee" value={fd.entryFee} onChange={e=>setFd({...fd,entryFee:Number(e.target.value)})} className="flex-1 p-3 border rounded-xl font-black text-blue-600"/><input required type="number" placeholder="Per Kill" value={fd.perKill} onChange={e=>setFd({...fd,perKill:Number(e.target.value)})} className="flex-1 p-3 border rounded-xl font-black text-emerald-600"/><input required type="number" placeholder="Slots" value={fd.totalSlots} onChange={e=>setFd({...fd,totalSlots:Number(e.target.value)})} className="flex-1 p-3 border rounded-xl font-black"/></div><input type="text" placeholder="Banner URL" value={fd.bannerUrl} onChange={e=>setFd({...fd,bannerUrl:e.target.value})} className="col-span-full p-3 border rounded-xl font-bold"/><textarea value={fd.customText} onChange={e=>setFd({...fd,customText:e.target.value})} placeholder="Custom Instructions/Rules" className="col-span-full p-3 border rounded-xl font-bold outline-none h-24"/><button className="col-span-full py-4 bg-blue-600 text-white font-black rounded-xl uppercase cursor-pointer">{editId ? 'UPDATE MATCH' : 'SAVE MATCH'}</button></form>}
     <div className="bg-white rounded-2xl border overflow-hidden">
       <div className="flex bg-slate-50 border-b justify-between items-center pr-4">
         <div className="flex flex-1">
           <button onClick={()=>setTb('active')} className={`flex-1 py-4 font-black uppercase text-xs cursor-pointer ${tb==='active'?'text-blue-600 border-b-2 border-blue-600':'text-slate-500'}`}>Active</button>
           <button onClick={()=>setTb('history')} className={`flex-1 py-4 font-black uppercase text-xs cursor-pointer ${tb==='history'?'text-emerald-600 border-b-2 border-emerald-600':'text-slate-500'}`}>History</button>
         </div>
-        {tb === 'history' && u.role === 'admin' && <button onClick={()=>md({t:'confirm', reqTimer:true, title:'DELETE ALL HISTORY', msg:'Wipe all ended/cancelled tournaments?', onC:()=>{d.tournaments.filter(x=>x.status==='result'||x.status==='cancelled').forEach(t=>deleteDoc(doc(db,'artifacts',appId,'public','data','tournaments',t.id)))}})} className="px-3 py-1 bg-rose-600 text-white font-black text-[10px] rounded uppercase">Clear History</button>}
       </div>
       <div className="divide-y">
       {d.tournaments.filter(t=>tb==='active'?t.status!=='result'&&t.status!=='cancelled':(t.status==='result'||t.status==='cancelled')).sort((a,b)=>new Date(b.dateTime)-new Date(a.dateTime)).map(t=>{
@@ -485,6 +500,7 @@ function TourneyMgr({ d, md, u, s }) {
         return <div key={t.id} className="p-5 flex flex-col md:flex-row justify-between items-center gap-4"><div className="flex items-center gap-4"><div className="w-20 h-20 bg-slate-900 rounded-xl relative overflow-hidden">{t.bannerUrl?<img src={t.bannerUrl} className="w-full h-full object-cover opacity-80"/>:<Trophy className="m-auto mt-6 text-white/30"/>}{t.createdBy&&<span className="absolute bottom-1 left-1 bg-black/66 text-white text-[8px] px-1 rounded uppercase font-bold">By: {t.createdBy}</span>}</div><div><div className="font-black text-xl uppercase mb-1">{t.title} <span className="text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-500">{t.status}</span></div><div className="text-[10px] font-bold text-slate-500 uppercase">{fDate(t.dateTime)} | Fee: {t.entryFee} | PK: {t.perKill} | Joined: {(t.joinedUsers||[]).length}/{t.totalSlots}</div></div></div>
         <div className="flex gap-2 flex-wrap bg-slate-50 p-2 rounded-xl border">
           {t.status==='upcoming'&&<>
+            {u.role === 'admin' && <button onClick={() => { setFd({gameId: t.gameId, modeId: t.modeId, title: t.title, bannerUrl: t.bannerUrl || '', customText: t.customText || '', dateTime: t.dateTime, type: t.type || 'solo', perKill: t.perKill, entryFee: t.entryFee, totalSlots: t.totalSlots, status: t.status }); setEditId(t.id); setFo(true); window.scrollTo(0,0); }} className="px-4 py-2 bg-blue-100 text-blue-700 border border-blue-200 font-black text-[10px] uppercase rounded-lg cursor-pointer">EDIT</button>}
             <button onClick={()=>md({t:'room',title:'Set Room & Start',onC: async (r,p)=>{
               if(!r || !p){ alert('Room ID and Password required!'); return; }
               try {
@@ -517,7 +533,10 @@ function TourneyMgr({ d, md, u, s }) {
               }
             }})} className="px-4 py-2 bg-amber-500 text-white font-black text-[10px] uppercase rounded-lg cursor-pointer">START</button>
           </>}
-          {t.status==='ongoing'&&<button onClick={()=>oR(t)} className="px-4 py-2 bg-emerald-600 text-white font-black text-[10px] uppercase rounded-lg cursor-pointer">RESULTS</button>}
+          {t.status==='ongoing'&&<>
+             {u.role === 'admin' && <button onClick={() => { setFd({gameId: t.gameId, modeId: t.modeId, title: t.title, bannerUrl: t.bannerUrl || '', customText: t.customText || '', dateTime: t.dateTime, type: t.type || 'solo', perKill: t.perKill, entryFee: t.entryFee, totalSlots: t.totalSlots, status: t.status }); setEditId(t.id); setFo(true); window.scrollTo(0,0); }} className="px-4 py-2 bg-blue-100 text-blue-700 border border-blue-200 font-black text-[10px] uppercase rounded-lg cursor-pointer">EDIT</button>}
+             <button onClick={()=>oR(t)} className="px-4 py-2 bg-emerald-600 text-white font-black text-[10px] uppercase rounded-lg cursor-pointer">RESULTS</button>
+          </>}
           {(t.status==='upcoming'||t.status==='ongoing')&&<button onClick={()=>st(t,'cancelled')} className="px-4 py-2 bg-white text-rose-500 border font-black text-[10px] uppercase rounded-lg cursor-pointer">CANCEL</button>}
         </div>
 
@@ -549,7 +568,7 @@ function TourneyMgr({ d, md, u, s }) {
   </div>;
 }
 
-// 🔥 FIN MGR: ADDED UPI COPY BUTTON & DELETE ALL TIMER 🔥
+// 🔥 FIN MGR: SAFE DELETION 🔥
 function FinMgr({ t, d, md, s, u: adminUser }) {
   const [cMsg, setCMsg] = useState('');
   const p = d.transactions.filter(x=> (t==='withdraw' ? (x.type==='withdraw_pending' || x.type==='referral_withdraw_pending') : x.type===`${t}_pending`) && x.status==='pending');
@@ -614,7 +633,6 @@ function FinMgr({ t, d, md, s, u: adminUser }) {
   })}</div>
   <div className="flex justify-between items-center mb-4 border-b pb-2">
     <h3 className="text-sm font-black uppercase tracking-widest text-slate-500">Recent History</h3>
-    {adminUser.role === 'admin' && <button onClick={()=>md({t:'confirm', reqTimer:true, title:`DELETE ALL ${t} HISTORY`, msg:'Are you sure?', onC:()=>{hT.forEach(x=>updateDoc(doc(db,'artifacts',appId,'public','data','transactions',x.id), {adminDeleted:true}))}})} className="px-3 py-1 bg-rose-600 text-white font-black text-[10px] uppercase rounded">Clear History</button>}
   </div>
   <table className="w-full text-sm text-left"><thead className="bg-slate-100 text-[10px] uppercase font-black"><tr><th className="p-3">User</th><th className="p-3">Details</th><th className="p-3">Amount</th><th className="p-3">Status</th><th className="p-3">Date</th><th className="p-3">Action</th></tr></thead><tbody className="divide-y">{hT.map(x=>{
     const upi = x.description?.includes('to ') ? x.description.split('to ')[1] : '';
@@ -633,7 +651,6 @@ function StaffMgr({ d, md, u }) {
   return <div className="bg-white p-6 rounded-2xl border"><div className="flex justify-between items-center mb-6"><h2 className="text-xl font-black uppercase">Staff Panel</h2><button onClick={()=>md({t:'staff',title:'Add Staff',onC:(e,p)=>{const uu=d.users.find(x=>x.email===e); if(uu){ if(uu.role==='admin') return md({t:'err',title:'Error',msg:'Cannot modify Super Admin.'}); updateDoc(doc(db,'artifacts',appId,'public','data','users',uu.uid),{role:'staff',permissions:p}); } else md({t:'err',title:'Error',msg:'User not found.'});}})} className="bg-blue-600 text-white px-5 py-2.5 rounded-lg font-black text-xs uppercase cursor-pointer"><Plus className="w-4 h-4 inline"/> Add Staff</button></div><div className="space-y-3">{sList.length===0&&<div className="p-6 text-center text-slate-400 font-bold bg-slate-50 rounded-xl">No staff.</div>}{sList.map(s=><div key={s.uid} className="p-5 border rounded-xl flex justify-between items-center bg-white shadow-sm"><div><div className="font-black text-2xl uppercase">{s.name}</div><div className="text-sm font-bold text-slate-500 mb-2">{s.email}</div><div className="flex gap-1">{s.permissions.map(p=><span key={p} className="text-[9px] bg-slate-100 text-slate-600 px-2 py-1 rounded border uppercase font-bold">{p}</span>)}</div></div><div className="flex gap-2"><button onClick={()=>{const po={dashboard:0,users:0,games:0,tournaments:0,finance:0,staff:0,settings:0}; s.permissions.forEach(x=>po[x]=1); md({t:'staff',title:'Edit Staff',ed:true,d1:s.email,dp:po,onC:(e,p)=>updateDoc(doc(db,'artifacts',appId,'public','data','users',s.uid),{permissions:p})});}} className="px-4 py-2 bg-slate-100 font-black text-xs uppercase rounded cursor-pointer"><Edit className="w-4 h-4"/></button><button onClick={()=>md({t:'confirm',title:'Remove Staff',msg:'Demote to regular user?',onC:()=>updateDoc(doc(db,'artifacts',appId,'public','data','users',s.uid),{role:'user',permissions:[]})})} className="px-4 py-2 bg-rose-50 text-rose-600 font-black text-xs uppercase rounded border border-rose-100 cursor-pointer"><Trash2 className="w-4 h-4"/></button></div></div>)}</div></div>;
 }
 
-// 🔥 SETTINGS MGR: FIXED AUTO-SAVE ON SOCIAL CHANNELS 🔥
 function SetMgr({ s, md, u: adminUser }) {
   const [ls, sls] = useState(s || {}); const [sv, setSv] = useState(false);
 
