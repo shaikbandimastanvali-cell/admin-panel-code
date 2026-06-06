@@ -315,7 +315,7 @@ function DeviceBanMgr({ d, md, u: adminUser }) {
         {d.bannedDevices.map(b => (
           <div key={b.id} className="p-4 border rounded-xl flex justify-between items-center">
             <div><div className="font-black">{b.deviceId}</div><div className="text-xs text-slate-400">{fDate(b.bannedAt)}</div></div>
-            {adminUser.role === 'admin' && <button onClick={async () => { md({t:'confirm',title:'Unban Device?',msg:'Confirm unban',onC:async()=>{try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bannedDevices', b.id)); md({t:'alert',title:'Success',msg:'Device unbanned successfully'}); } catch (err) { md({t:'err',title:'Error',msg:err.message}); }}})} }} className="bg-emerald-100 text-emerald-700 px-4 py-2 rounded-lg font-black text-xs cursor-pointer">UNBAN</button>}
+            {adminUser.role === 'admin' && <button onClick={() => md({t:'confirm',title:'Unban Device?',msg:'Confirm unban',onC:async()=>{try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bannedDevices', b.id)); md({t:'alert',title:'Success',msg:'Device unbanned successfully'}); } catch (err) { md({t:'err',title:'Error',msg:err.message}); }}})} className="bg-emerald-100 text-emerald-700 px-4 py-2 rounded-lg font-black text-xs cursor-pointer">UNBAN</button>}
           </div>
         ))}
       </div>
@@ -610,7 +610,7 @@ function FinMgr({ t, d, md, s, u: adminUser }) {
     const upi = x.description?.includes('to ') ? x.description.split('to ')[1] : '';
     return <div key={x.id} className="p-4 bg-amber-50/50 border border-amber-200 rounded-xl flex justify-between items-center"><div className="flex-1"><div className="font-black text-3xl mb-1">{Math.abs(x.amount)}</div><div className="text-sm font-bold text-blue-600 uppercase">{(d.users.find(u=>u.uid===x.uid)||{}).name} {x.type==='referral_withdraw_pending'&&<span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded text-[9px] ml-2 tracking-widest">REFERRAL WITHDRAW</span>}</div>
     <div className="text-xs font-bold text-slate-700 mt-1 flex items-center gap-2">{x.description} {upi && <button onClick={()=>cT(upi)} className="bg-blue-100 text-blue-700 p-1 rounded hover:bg-blue-200 cursor-pointer"><Copy className="w-3 h-3"/></button>}</div>
-    <div className="text-[10px] font-bold text-slate-400 mt-1">{fDate(x.date)}</div></div><div className="flex gap-2"><button onClick={()=>act(x,'reject')} className="px-5 py-3 bg-white text-rose-600 font-black uppercase text-xs rounded-lg border border-rose-200 cursor-pointer">Reject</button><button onClick={()=>act(x,'approve')} className="px-5 py-3 bg-emerald-500 text-white font-black uppercase text-xs rounded-lg cursor-pointer">Approve</button></div></div>
+    <div className="text-[10px] font-bold text-slate-500">{x.description} | {fDate(x.date)}</div></div><div className="flex gap-2"><button onClick={()=>act(x,'reject')} className="px-5 py-3 bg-white text-rose-600 font-black uppercase text-xs rounded-lg border border-rose-200 cursor-pointer">Reject</button><button onClick={()=>act(x,'approve')} className="px-5 py-3 bg-emerald-500 text-white font-black uppercase text-xs rounded-lg cursor-pointer">Approve</button></div></div>
   })}</div>
   <div className="flex justify-between items-center mb-4 border-b pb-2">
     <h3 className="text-sm font-black uppercase tracking-widest text-slate-500">Recent History</h3>
