@@ -262,8 +262,9 @@ function UniModal({ m, sm }) {
   );
 }
 
+// 🔥 DASHBOARD: RECALCULATE STATS BUTTON ADDED WITH 'TODAY' LOGIC 🔥
 function Dash({ s }) {
-  const [stats, setStats] = useState({ totalUsers: 0, totalDeposits: 0, totalWithdraws: 0, pendingDeposits: 0 });
+  const [stats, setStats] = useState({ totalUsers: 0, todayUsers: 0, totalDeposits: 0, todayDeposits: 0, totalWithdraws: 0, todayWithdraws: 0, pendingDeposits: 0 });
   const [calculating, setCalculating] = useState(false);
 
   useEffect(() => {
@@ -279,27 +280,42 @@ function Dash({ s }) {
       const uSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'users'));
       const tSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'));
 
-      let totalUsers = 0;
-      uSnap.forEach(d => { if(d.data().role === 'user') totalUsers++; });
+      const todayStr = new Date().toISOString().split('T')[0];
+
+      let totalUsers = 0; let todayUsers = 0;
+      uSnap.forEach(d => { 
+        const u = d.data();
+        if(u.role === 'user') {
+           totalUsers++; 
+           if (u.joinedDate && u.joinedDate.startsWith(todayStr)) todayUsers++;
+        }
+      });
 
       let totalDeposits = 0; let totalWithdraws = 0; let pendingDeposits = 0;
+      let todayDeposits = 0; let todayWithdraws = 0;
 
       tSnap.forEach(d => {
          const tx = d.data();
-         if (tx.status === 'completed' && tx.type.includes('deposit')) totalDeposits += Number(tx.amount);
-         if (tx.status === 'completed' && tx.type.includes('withdraw')) totalWithdraws += Math.abs(Number(tx.amount));
+         if (tx.status === 'completed' && tx.type.includes('deposit')) {
+            totalDeposits += Number(tx.amount);
+            if (tx.date && tx.date.startsWith(todayStr)) todayDeposits += Number(tx.amount);
+         }
+         if (tx.status === 'completed' && tx.type.includes('withdraw')) {
+            totalWithdraws += Math.abs(Number(tx.amount));
+            if (tx.date && tx.date.startsWith(todayStr)) todayWithdraws += Math.abs(Number(tx.amount));
+         }
          if (tx.status === 'pending' && tx.type.includes('deposit')) pendingDeposits++;
       });
 
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'stats'), {
-        totalUsers, totalDeposits, totalWithdraws, pendingDeposits, lastUpdated: new Date().toISOString()
+        totalUsers, todayUsers, totalDeposits, todayDeposits, totalWithdraws, todayWithdraws, pendingDeposits, lastUpdated: new Date().toISOString()
       }, { merge: true });
 
     } catch (e) { console.error(e); }
     setCalculating(false);
   };
 
-  const bx = (l, av, c) => <div className="bg-white p-6 rounded-2xl border shadow-sm relative"><div className="text-sm font-black uppercase text-slate-400 mb-4">{l}</div><div className={`text-3xl font-black ${c}`}>{av}</div></div>;
+  const bx = (l, tv, av, c) => <div className="bg-white p-6 rounded-2xl border shadow-sm relative"><div className="text-sm font-black uppercase text-slate-400 mb-4">{l}</div><div className="grid grid-cols-2 gap-2"><div className="border-r pr-2"><div className="text-[10px] font-bold text-slate-400 uppercase">Today</div><div className={`text-2xl font-black ${c}`}>{tv}</div></div><div><div className="text-[10px] font-bold text-slate-400 uppercase">All Time</div><div className={`text-2xl font-black ${c}`}>{av}</div></div></div><div className="absolute top-4 right-4 text-[8px] bg-rose-100 text-rose-600 px-2 py-1 rounded font-black uppercase tracking-widest">Requires Stats Doc</div></div>;
 
   return <div className="space-y-6">
     <div className="flex justify-between items-center bg-white p-4 rounded-2xl border shadow-sm">
@@ -312,7 +328,11 @@ function Dash({ s }) {
       </button>
     </div>
     
-    <div className="grid md:grid-cols-3 gap-4">{bx("Registered Users", stats.totalUsers || 0, "text-blue-600")} {bx("Total Deposits", `${stats.totalDeposits || 0} ${s.currencySymbol}`, "text-emerald-600")} {bx("Total Withdraws", `${stats.totalWithdraws || 0} ${s.currencySymbol}`, "text-rose-600")}</div>
+    <div className="grid md:grid-cols-3 gap-4">
+      {bx("Registered Users", stats.todayUsers || 0, stats.totalUsers || 0, "text-blue-600")} 
+      {bx("Total Deposits", `${stats.todayDeposits || 0} ${s.currencySymbol}`, `${stats.totalDeposits || 0} ${s.currencySymbol}`, "text-emerald-600")} 
+      {bx("Total Withdraws", `${stats.todayWithdraws || 0} ${s.currencySymbol}`, `${stats.totalWithdraws || 0} ${s.currencySymbol}`, "text-rose-600")}
+    </div>
     
     <div className="grid md:grid-cols-2 gap-4">
       <div className="bg-amber-50 p-6 rounded-2xl border border-amber-200 flex justify-between"><div className="font-black text-amber-800"><div className="text-xs uppercase tracking-widest text-amber-600">Pending Deposits</div><div className="text-3xl mt-1">{stats.pendingDeposits || 0} Required</div></div><Clock className="w-12 h-12 text-amber-500 opacity-50"/></div>
