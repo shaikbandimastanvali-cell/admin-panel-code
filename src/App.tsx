@@ -55,20 +55,22 @@ const copyText = async (text, successCallback) => {
   } catch (err) { console.error(err); alert("Copy failed"); }
 };
 
+// 🔥 FIX 2: DYNAMIC TOKEN FETCHING FOR PUSH NOTIFICATIONS 🔥
 const sendPushNotification = async ({ title, body, targetUids, data = {} }) => {
   let fcmTokens = [];
   try {
-    // 🔥 FIX: Dynamically fetch FCM tokens on demand so it works with Lazy Loading 🔥
     if (targetUids[0] === 'all') {
       const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'users'));
       snap.forEach(d => { if (d.data().fcmToken && d.data().role === 'user') fcmTokens.push(d.data().fcmToken); });
-    } else {
-      // Chunk queries by 10 to obey Firestore 'in' query limits
-      for (let i = 0; i < targetUids.length; i += 10) {
-        const chunk = targetUids.slice(i, i + 10);
-        const snap = await getDocs(query(collection(db, 'artifacts', appId, 'public', 'data', 'users'), where('uid', 'in', chunk)));
-        snap.forEach(d => { if (d.data().fcmToken) fcmTokens.push(d.data().fcmToken); });
-      }
+    } else if (targetUids.length > 0) {
+      // Safe, dynamic fetch for specific users (Perfect for Lazy Loading)
+      await Promise.all(targetUids.map(async (uid) => {
+        if (!uid) return;
+        const uSnap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', uid));
+        if (uSnap.exists() && uSnap.data().fcmToken) {
+          fcmTokens.push(uSnap.data().fcmToken);
+        }
+      }));
     }
   } catch (err) { console.error("Token fetch error:", err); }
 
@@ -78,15 +80,8 @@ const sendPushNotification = async ({ title, body, targetUids, data = {} }) => {
     android: { priority: 'high', notification: { sound: 'default', channel_id: 'tournament_alerts' } },
     apns: { headers: { 'apns-priority': '10' }, payload: { aps: { sound: 'default', 'content-available': 1 } } },
   };
-
-  const res = await fetch('https://esports-tournament-app-beta.vercel.app/api/sendNotification', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text().catch(() => 'Unknown error');
-    throw new Error(`Notification API returned ${res.status}: ${errText}`);
-  }
+  const res = await fetch('https://esports-tournament-app-beta.vercel.app/api/sendNotification', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  if (!res.ok) throw new Error(`Notification API returned ${res.status}`);
   return res.json().catch(() => ({}));
 };
 
@@ -109,11 +104,12 @@ export default function AdminApp() {
     init(); return onAuthStateChanged(auth, u => { setFbUser(u); setLoading(false); });
   }, []);
 
-  // 🔥 GLOBAL LOAD IS GONE: ONLY LOAD SETTINGS AND ADMIN PROFILE 🔥
+  // LOAD LIGHTWEIGHT COLLECTIONS GLOBALLY
   useEffect(() => {
     if (!fbUser) return;
-    const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global'), d => { if (d.exists()) setSettings(p => ({...p, ...d.data()})); });
-    return () => unsub();
+    const unsubs = ['games','modes'].map(c => onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', c), s => setData(p => ({ ...p, [c]: s.docs.map(d => ({ id: d.id, ...d.data() })) }))));
+    unsubs.push(onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global'), d => { if (d.exists()) setSettings(p => ({...p, ...d.data()})); }));
+    return () => unsubs.forEach(u => u());
   }, [fbUser]);
 
   useEffect(() => {
@@ -145,25 +141,69 @@ export default function AdminApp() {
     alert("Access Denied/Invalid");
   };
 
+  const [data, setData] = useState({ users: [], games: [], modes: [], tournaments: [], transactions: [], bannedDevices: [], messages: [] });
+
   if (loading) return <div className="flex h-screen items-center justify-center bg-slate-900"><Loader2 className="w-10 h-10 text-blue-500 animate-spin"/></div>;
   if (!admin) return (
     <div className="flex min-h-screen items-center justify-center bg-slate-900 p-4"><div className="w-full max-w-sm bg-slate-800 rounded-2xl shadow-xl overflow-hidden"><div className="p-6 bg-slate-950 text-center"><ShieldAlert className="w-12 h-12 text-blue-500 mx-auto mb-2"/><h2 className="text-xl font-black text-white uppercase tracking-widest">Admin Access</h2></div><form onSubmit={login} className="p-6 space-y-4"><input type="email" name="em" placeholder="Email" required className="w-full p-3 rounded-lg bg-slate-900 text-white border border-slate-700 outline-none focus:border-blue-500"/><input type="password" name="pw" placeholder="Password" required className="w-full p-3 rounded-lg bg-slate-900 text-white border border-slate-700 outline-none focus:border-blue-500"/><button className="w-full bg-blue-600 text-white font-black py-3 rounded-lg hover:bg-blue-700 uppercase tracking-widest cursor-pointer select-none">Login</button></form></div></div>
   );
-  return <AdminLayout u={admin} sets={settings} out={() => {localStorage.removeItem('admin_uid'); setAdmin(null);}} />;
+  return <AdminLayout u={admin} data={data} setData={setData} sets={settings} out={() => {localStorage.removeItem('admin_uid'); setAdmin(null);}} />;
 }
 
-function AdminLayout({ u, sets, out }) {
+function AdminLayout({ u, data, setData, sets, out }) {
   const [view, setView] = useState('dashboard'); const [md, setMd] = useState(null);
   const acc = (s) => u.role === 'admin' || (u.permissions||[]).includes(s);
   const navs = [{i:'dashboard',ic:Home,l:'Dashboard'},{i:'users',ic:Users,l:'Users'},{i:'games',ic:Gamepad2,l:'Games & Modes'},{i:'tournaments',ic:Trophy,l:'Tournaments'},{i:'deposits',ic:ArrowDownLeft,l:'Deposits'},{i:'withdraws',ic:ArrowUpRight,l:'Withdraws'},{i:'messages',ic:Bell,l:'Messages'},{i:'staff',ic:ShieldAlert,l:'Staff'},{i:'deviceBans',ic:ShieldAlert,l:'Device Bans'},{i:'settings',ic:Settings,l:'Settings'}];
+
+  // LAZY LOADING LOGIC
+  useEffect(() => {
+    let unsubs = [];
+
+    if (view === 'deposits' || view === 'withdraws') {
+      unsubs.push(onSnapshot(query(baseRef('transactions'), where('status', '==', 'pending')), snap => {
+        setData(p => {
+           const pend = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+           const hist = p.transactions.filter(x => x.status !== 'pending');
+           const merged = [...hist.filter(h => !pend.find(x => x.id === h.id)), ...pend].sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+           return { ...p, transactions: merged };
+        });
+      }));
+      unsubs.push(onSnapshot(query(baseRef('transactions'), orderBy('date', 'desc'), limit(150)), snap => {
+        setData(p => {
+           const hist = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+           const pend = p.transactions.filter(x => x.status === 'pending');
+           const merged = [...hist, ...pend.filter(x => !hist.find(h => h.id === x.id))].sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+           return { ...p, transactions: merged };
+        });
+      }));
+    }
+
+    if (view === 'users') {
+      unsubs.push(onSnapshot(query(baseRef('users'), orderBy('joinedDate', 'desc'), limit(100)), s => setData(p => ({ ...p, users: s.docs.map(d => ({ id: d.id, ...d.data() })) }))));
+    }
+    if (view === 'staff') {
+      unsubs.push(onSnapshot(query(baseRef('users'), where('role', '==', 'staff')), s => setData(p => ({ ...p, users: s.docs.map(d => ({ id: d.id, ...d.data() })) }))));
+    }
+    if (view === 'tournaments') {
+      unsubs.push(onSnapshot(query(baseRef('tournaments'), orderBy('dateTime', 'desc'), limit(100)), s => setData(p => ({ ...p, tournaments: s.docs.map(d => ({ id: d.id, ...d.data() })) }))));
+    }
+    if (view === 'messages') {
+      unsubs.push(onSnapshot(query(baseRef('messages'), orderBy('createdAt', 'desc'), limit(100)), s => setData(p => ({ ...p, messages: s.docs.map(d => ({ id: d.id, ...d.data() })) }))));
+    }
+    if (view === 'deviceBans') {
+      unsubs.push(onSnapshot(query(baseRef('bannedDevices'), limit(100)), s => setData(p => ({ ...p, bannedDevices: s.docs.map(d => ({ id: d.id, ...d.data() })) }))));
+    }
+
+    return () => unsubs.forEach(unsub => unsub());
+  }, [view, setData]);
 
   const vMap = {
     dashboard: <Dash s={sets}/>, 
     users: <UserMgr md={setMd} s={sets} u={u}/>, 
     games: <GamesMgr md={setMd} u={u}/>, 
     tournaments: <TourneyMgr md={setMd} u={u} s={sets}/>,
-    deposits: <FinMgr t="deposit" md={setMd} s={sets} u={u}/>, 
-    withdraws: <FinMgr t="withdraw" md={setMd} s={sets} u={u}/>, 
+    deposits: <FinMgr t="deposit" md={setMd} s={sets} u={u} data={data}/>, 
+    withdraws: <FinMgr t="withdraw" md={setMd} s={sets} u={u} data={data}/>, 
     messages: <MessageMgr md={setMd} u={u}/>, 
     staff: <StaffMgr md={setMd} u={u}/>, 
     deviceBans: <DeviceBanMgr md={setMd} u={u}/>, 
@@ -190,7 +230,6 @@ function UniModal({ m, sm }) {
     if (cd > 0) { const timer = setTimeout(() => setCd(cd - 1), 1000); return () => clearTimeout(timer); }
   }, [cd]);
 
-  // Dynamic user search for messages modal
   useEffect(() => {
     if (m.t === 'message' && i3 === 'specific' && i4.length > 2) {
       const searchUsers = async () => {
@@ -245,9 +284,10 @@ function UniModal({ m, sm }) {
   );
 }
 
-// 🔥 DASHBOARD: READS FROM SETTINGS/STATS (NO GLOBAL LOOP) 🔥
+// 🔥 DASHBOARD: RECALCULATE STATS BUTTON ADDED 🔥
 function Dash({ s }) {
-  const [stats, setStats] = useState({ totalUsers: 0, totalDeposits: 0, totalWithdraws: 0, pendingDeposits: 0, pushReady: 0 });
+  const [stats, setStats] = useState({ totalUsers: 0, totalDeposits: 0, totalWithdraws: 0, pendingDeposits: 0 });
+  const [calculating, setCalculating] = useState(false);
 
   useEffect(() => {
     const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'stats'), d => {
@@ -256,16 +296,53 @@ function Dash({ s }) {
     return () => unsub();
   }, []);
 
-  const bx = (l, tv, av, c) => <div className="bg-white p-6 rounded-2xl border shadow-sm relative"><div className="text-sm font-black uppercase text-slate-400 mb-4">{l}</div><div className="grid grid-cols-2 gap-2"><div className="border-r pr-2"><div className="text-[10px] font-bold text-slate-400 uppercase">Today</div><div className={`text-2xl font-black ${c}`}>{tv}</div></div><div><div className="text-[10px] font-bold text-slate-400 uppercase">All Time</div><div className={`text-2xl font-black ${c}`}>{av}</div></div></div><div className="absolute top-4 right-4 text-[8px] bg-rose-100 text-rose-600 px-2 py-1 rounded font-black uppercase tracking-widest">Requires Stats Doc</div></div>;
+  const handleRecalculate = async () => {
+    setCalculating(true);
+    try {
+      const uSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'users'));
+      const tSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'));
+
+      let totalUsers = 0;
+      uSnap.forEach(d => { if(d.data().role === 'user') totalUsers++; });
+
+      let totalDeposits = 0; let totalWithdraws = 0; let pendingDeposits = 0;
+
+      tSnap.forEach(d => {
+         const tx = d.data();
+         if (tx.status === 'completed' && tx.type.includes('deposit')) totalDeposits += Number(tx.amount);
+         if (tx.status === 'completed' && tx.type.includes('withdraw')) totalWithdraws += Math.abs(Number(tx.amount));
+         if (tx.status === 'pending' && tx.type.includes('deposit')) pendingDeposits++;
+      });
+
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'stats'), {
+        totalUsers, totalDeposits, totalWithdraws, pendingDeposits, lastUpdated: new Date().toISOString()
+      }, { merge: true });
+
+    } catch (e) { console.error(e); }
+    setCalculating(false);
+  };
+
+  const bx = (l, av, c) => <div className="bg-white p-6 rounded-2xl border shadow-sm relative"><div className="text-sm font-black uppercase text-slate-400 mb-4">{l}</div><div className={`text-3xl font-black ${c}`}>{av}</div></div>;
 
   return <div className="space-y-6">
-    <div className="grid md:grid-cols-3 gap-4">{bx("Registered Users", "N/A", stats.totalUsers || 0, "text-blue-600")} {bx("Deposits", "N/A", stats.totalDeposits || 0, "text-emerald-600")} {bx("Withdraws", "N/A", stats.totalWithdraws || 0, "text-rose-600")}</div>
+    <div className="flex justify-between items-center bg-white p-4 rounded-2xl border shadow-sm">
+      <div>
+         <h3 className="font-black text-lg text-slate-800 uppercase tracking-widest">Global Statistics</h3>
+         <p className="text-xs font-bold text-slate-500">Last updated: {stats.lastUpdated ? fDate(stats.lastUpdated) : 'Never'}</p>
+      </div>
+      <button onClick={handleRecalculate} disabled={calculating} className="bg-blue-600 text-white px-4 py-2 rounded-xl font-black uppercase text-xs disabled:opacity-50 flex items-center gap-2 cursor-pointer shadow-md">
+        {calculating && <Loader2 className="w-4 h-4 animate-spin"/>} Recalculate Now
+      </button>
+    </div>
+    
+    <div className="grid md:grid-cols-3 gap-4">{bx("Registered Users", stats.totalUsers || 0, "text-blue-600")} {bx("Total Deposits", `${stats.totalDeposits || 0} ${s.currencySymbol}`, "text-emerald-600")} {bx("Total Withdraws", `${stats.totalWithdraws || 0} ${s.currencySymbol}`, "text-rose-600")}</div>
+    
     <div className="grid md:grid-cols-2 gap-4">
       <div className="bg-amber-50 p-6 rounded-2xl border border-amber-200 flex justify-between"><div className="font-black text-amber-800"><div className="text-xs uppercase tracking-widest text-amber-600">Pending Deposits</div><div className="text-3xl mt-1">{stats.pendingDeposits || 0} Required</div></div><Clock className="w-12 h-12 text-amber-500 opacity-50"/></div>
       <div className={`p-6 rounded-2xl border flex justify-between bg-blue-50 border-blue-200`}>
         <div className={`font-black text-blue-800`}>
           <div className={`text-xs uppercase tracking-widest text-blue-600`}>Cost Saving Mode Active</div>
-          <div className="text-sm mt-2 font-medium opacity-80 max-w-[200px]">Dashboard uses minimal reads. Run stats Cloud Function to update totals.</div>
+          <div className="text-sm mt-2 font-medium opacity-80 max-w-[200px]">Dashboard uses minimal reads. Click "Recalculate" to manually sync the latest totals.</div>
         </div>
         <ShieldAlert className={`w-12 h-12 opacity-50 text-blue-500`}/>
       </div>
@@ -273,7 +350,6 @@ function Dash({ s }) {
   </div>;
 }
 
-// 🔥 USERS MGR: COMPONENT-LEVEL LAZY LOADING & QUERY SEARCH 🔥
 function UserMgr({ md, s, u: adminUser }) {
   const [users, setUsers] = useState([]);
   const [q, sq] = useState(''); 
@@ -284,17 +360,13 @@ function UserMgr({ md, s, u: adminUser }) {
 
   useEffect(() => {
     let qRef = query(baseRef('users'), orderBy('joinedDate', 'desc'), limit(50));
-    
-    // Switch to search query if input provided
     if (q.length > 2) {
       qRef = query(baseRef('users'), or(where('email', '==', q), where('uid', '==', q)), limit(20));
     }
-    
     const unsub = onSnapshot(qRef, snap => setUsers(snap.docs.map(d => ({id: d.id, ...d.data()}))));
     return () => unsub();
   }, [q]);
 
-  // Load invited users ONLY when a specific user is selected
   useEffect(() => {
     if (!su) { setInvited([]); return; }
     const unsub = onSnapshot(query(baseRef('users'), where('referredBy', '==', su.uid)), snap => {
@@ -346,8 +418,8 @@ function UserMgr({ md, s, u: adminUser }) {
     <div className="flex-1 overflow-auto"><table className="w-full text-left text-sm"><thead className="bg-slate-100 text-[10px] font-black uppercase text-slate-500 sticky top-0 z-10"><tr><th className="p-4">User</th><th className="p-4">Game Info</th><th className="p-4">Stats</th><th className="p-4">Status</th></tr></thead><tbody className="divide-y">{users.map(u=><tr key={u.uid} onClick={()=>setSu(u)} className="hover:bg-blue-50 cursor-pointer transition-colors"><td className="p-4"><div className="font-black text-base">{u.name}</div><div className="text-[10px] font-bold text-slate-400">{u.email}</div></td><td className="p-4"><div className="font-bold text-blue-600">{u.gameName||'N/A'}</div><div className="text-[10px] font-mono">{u.gameUid || u.uid}</div></td><td className="p-4 font-black text-xs space-x-2"><span className="text-emerald-600">{u.balance}B</span><span className="text-blue-600">{u.totalKills||0}K</span><span className="text-purple-600">{u.totalWinnings||0}W</span></td><td className="p-4">{u.isBanned?<span className="bg-rose-100 text-rose-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Banned</span>:<span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Active</span>}{u.isRooted && <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Rooted</span>}{!u.fcmToken && <span className="bg-slate-100 text-slate-500 px-2 py-1 rounded text-[9px] font-black uppercase">No Push</span>}</td></tr>)}</tbody></table></div></div>;
 }
 
-// 🔥 FIN MGR: LAZY LOADED WITH `totalDeposited` INTEGRATION 🔥
-function FinMgr({ t, md, s, u: adminUser }) {
+// 🔥 FIX 1: FIN MGR REJECTION BUG FIXED 🔥
+function FinMgr({ t, data, md, s, u: adminUser }) {
   const [pending, setPending] = useState([]);
   const [history, setHistory] = useState([]);
   const [cMsg, setCMsg] = useState('');
@@ -365,11 +437,12 @@ function FinMgr({ t, md, s, u: adminUser }) {
     t:'confirm',title:'Confirm',msg:`${st} request?`,
     onC:async ()=>{
       try {
-        if(st==='approve') {
-          const userSnap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', tx.uid));
-          const uu = userSnap.exists() ? userSnap.data() : null;
+        // Fetch user completely outside the logic block so Rejection can use it to refund
+        const userSnap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', tx.uid));
+        const uu = userSnap.exists() ? userSnap.data() : null;
 
-if(t==='deposit') {
+        if(st==='approve') {
+          if(t==='deposit') {
             if (uu) {
               await updateDoc(doc(db,'artifacts',appId,'public','data','users',tx.uid), {
                 balance: Number(uu.balance || 0) + Number(tx.amount),
@@ -386,10 +459,9 @@ if(t==='deposit') {
               }
             }
           } 
-          // 🔥 FIX: On Withdraw Approve, do NOTHING to the balance. It was deducted when requested.
           await updateDoc(doc(db,'artifacts',appId,'public','data','transactions',tx.id),{status:'completed'});
         } else {
-           // 🔥 FIX: On Reject, if it's a withdraw, REFUND the money back to the user!
+           // 🔥 BUG FIXED: If rejecting a withdrawal, refund the money 🔥
            if (t==='withdraw' && uu) {
              if (tx.type==='referral_withdraw_pending') {
                await updateDoc(doc(db,'artifacts',appId,'public','data','users',tx.uid), { referralBalance: Number(uu.referralBalance||0) + Math.abs(tx.amount) });
@@ -444,7 +516,6 @@ if(t==='deposit') {
   </div>;
 }
 
-// 🔥 GAMES MGR: LAZY LOADED WITH `getDocs` 🔥
 function GamesMgr({ md, u }) {
   const [games, setGames] = useState([]);
   const [modes, setModes] = useState([]);
@@ -469,7 +540,6 @@ function GamesMgr({ md, u }) {
     </div>)}</div></div>)}</div></div>;
 }
 
-// 🔥 TOURNEY MGR: LAZY LOADED 🔥
 function TourneyMgr({ md, u, s }) {
   const [tournaments, setTournaments] = useState([]);
   const [games, setGames] = useState([]);
@@ -616,6 +686,27 @@ function TourneyMgr({ md, u, s }) {
               if(!r || !p){ alert('Room ID and Password required!'); return; }
               try {
                 await updateDoc(doc(db,'artifacts',appId,'public','data','tournaments',t.id),{roomId:r,password:p,status:'ongoing'});
+
+                const targetUids = (t.joinedUsers||[]).map(ju => ju.uid || ju);
+
+                if (targetUids.length > 0) {
+                  const notifTitle = `🎮 ${t.title} — Room is LIVE!`;
+                  const notifBody  = `Room ID: ${r}\nPassword: ${p}`;
+
+                  await sendPushNotification({
+                    title: notifTitle,
+                    body:  notifBody,
+                    targetUids,
+                    data: {
+                      type:       'room_live',
+                      roomId:     String(r),
+                      password:   String(p),
+                      matchTitle: String(t.title),
+                      matchId:    String(t.id),
+                    },
+                  });
+                }
+
                 md({t:'alert',title:'Success',msg:'Room updated & push notification sent!'});
               } catch(err) {
                 md({t:'err',title:'Error',msg:err.message});
@@ -628,6 +719,7 @@ function TourneyMgr({ md, u, s }) {
           </>}
           {(t.status==='upcoming'||t.status==='ongoing')&&<button onClick={()=>st(t,'cancelled')} className="px-4 py-2 bg-white text-rose-500 border font-black text-[10px] uppercase rounded-lg cursor-pointer">CANCEL</button>}
         </div>
+
         <div className="w-full mt-4 bg-slate-50 p-3 rounded-lg border text-xs">
           <div className="font-black text-slate-400 uppercase mb-2">Joined Players ({(t.joinedUsers||[]).length})</div>
           <div className="max-h-32 overflow-y-auto space-y-1">
@@ -643,13 +735,13 @@ function TourneyMgr({ md, u, s }) {
             })}
           </div>
         </div>
+
         </div>;
       })}
     </div></div>
   </div>;
 }
 
-// 🔥 DEVICE BANS: LAZY LOADED 🔥
 function DeviceBanMgr({ md, u: adminUser }) {
   const [bannedDevices, setBannedDevices] = useState([]);
   useEffect(() => {
@@ -673,7 +765,6 @@ function DeviceBanMgr({ md, u: adminUser }) {
   );
 }
 
-// 🔥 MESSAGES: LAZY LOADED 🔥
 function MessageMgr({ md, u: adminUser }) {
   const [messages, setMessages] = useState([]);
   useEffect(() => {
@@ -691,6 +782,7 @@ function MessageMgr({ md, u: adminUser }) {
             if(targetType === 'specific' && (!targetUids || targetUids.length === 0)) return md({t:'err', title:'Error', msg:'Please select at least one user.'});
             try {
               await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'messages'), { title, body, createdAt: new Date().toISOString(), readBy: [], targetUids: targetType === 'specific' ? targetUids : ['all'] });
+              await sendPushNotification({ title, body, targetUids: targetType === 'specific' ? targetUids : ['all'] });
               md({t:'alert', title:'Success', msg:'Message pushed successfully'});
             } catch(e) { md({t:'err', title:'Notification Error', msg:e.message}); }
           }})} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-black text-xs uppercase cursor-pointer"><Plus className="w-4 h-4 inline"/> Create</button>
@@ -724,7 +816,6 @@ function MessageMgr({ md, u: adminUser }) {
   );
 }
 
-// 🔥 STAFF MGR: LAZY LOADED 🔥
 function StaffMgr({ md, u }) {
   const [sList, setSList] = useState([]);
   useEffect(() => {
