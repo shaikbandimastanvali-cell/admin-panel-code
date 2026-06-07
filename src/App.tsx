@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, addDoc, deleteDoc, enableIndexedDbPersistence } from 'firebase/firestore';
+import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, addDoc, deleteDoc, enableIndexedDbPersistence, query, orderBy, limit, getDocs } from 'firebase/firestore';
 import { Home, Trophy, User as UIcon, Wallet, Settings, LogOut, Users, Gamepad2, Plus, Edit, Trash2, Check, X, Search, Menu, ShieldAlert, Clock, ArrowUpRight, ArrowDownLeft, Info, PlayCircle, ChevronRight, CheckCircle2, Loader2, Link as LinkIcon, XCircle, Bell, Copy } from 'lucide-react';
 
 // --- FIREBASE CONFIG ---
@@ -114,7 +114,9 @@ export default function AdminApp() {
 
   useEffect(() => {
     if (!fbUser) return;
-    const unsubs = ['users','games','modes','tournaments','transactions','bannedDevices', 'messages'].map(c => onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', c), s => setData(p => ({ ...p, [c]: s.docs.map(d => ({ id: d.id, ...d.data() })) }))));
+   // 🔥 GLOBAL OPTIMIZATION: Only load tiny collections globally. Heavy data is lazy-loaded by page. 🔥
+    const unsubs = ['games', 'modes'].map(c => onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', c), s => setData(p => ({ ...p, [c]: s.docs.map(d => ({ id: d.id, ...d.data() })) }))));
+    unsubs.push(onSnapshot(query(collection(db, 'artifacts', appId, 'public', 'data', 'users'), limit(500)), s => setData(p => ({ ...p, users: s.docs.map(d => ({ id: d.id, ...d.data() })) }))));
     unsubs.push(onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global'), d => { if (d.exists()) setSettings(p => ({...p, ...d.data()})); }));
     return () => unsubs.forEach(u => u());
   }, [fbUser]);
