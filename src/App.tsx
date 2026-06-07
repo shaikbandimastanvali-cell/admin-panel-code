@@ -485,7 +485,7 @@ function FinMgr({ t, md, s, u: adminUser }) {
   <div className="flex justify-between items-center mb-4 border-b pb-2">
     <h3 className="text-sm font-black uppercase tracking-widest text-slate-500">Recent History</h3>
   </div>
-  <table className="w-full text-sm text-left"><thead className="bg-slate-100 text-[10px] uppercase font-black"><tr><th className="p-3">User UID</th><th className="p-3">Details</th><th className="p-3">Amount</th><th className="p-3">Status</th><th className="p-3">Date</th><th className="p-3">Action</th></tr></thead><tbody className="divide-y">{history.map(x=>{
+  <table className="w-full text-sm text-left"><thead className="bg-slate-100 text-[10px] uppercase font-black"><tr><th className="p-3">User UID</th><th className="p-3">Details</th><th className="p-3">Amount</th><th className="p-3">Status</th><th className="p-3">Date</th><th className="p-3">Action</th></tr></thead><tbody className="divide-y">{history.filter(x => !x.adminDeleted).map(x=>{
     const upi = x.description?.includes('to ') ? x.description.split('to ')[1] : '';
     return <tr key={x.id}><td className="p-3 font-bold">{x.uid} {x.type==='referral_withdraw_pending'&&<span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded text-[8px] ml-2 block w-max mt-1">REF</span>}</td>
     <td className="p-3 text-xs font-bold text-slate-600 flex flex-col gap-1">{x.description} {upi && <button onClick={()=>cT(upi)} className="bg-blue-100 text-blue-700 p-1 w-max rounded hover:bg-blue-200 cursor-pointer flex items-center gap-1"><Copy className="w-3 h-3"/> COPY</button>}</td>
