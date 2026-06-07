@@ -55,15 +55,38 @@ const copyText = async (text, successCallback) => {
   } catch (err) { console.error(err); alert("Copy failed"); }
 };
 
-const sendPushNotification = async ({ title, body, targetUids, data = {}, fcmTokens = [] }) => {
+const sendPushNotification = async ({ title, body, targetUids, data = {} }) => {
+  let fcmTokens = [];
+  try {
+    // 🔥 FIX: Dynamically fetch FCM tokens on demand so it works with Lazy Loading 🔥
+    if (targetUids[0] === 'all') {
+      const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'users'));
+      snap.forEach(d => { if (d.data().fcmToken && d.data().role === 'user') fcmTokens.push(d.data().fcmToken); });
+    } else {
+      // Chunk queries by 10 to obey Firestore 'in' query limits
+      for (let i = 0; i < targetUids.length; i += 10) {
+        const chunk = targetUids.slice(i, i + 10);
+        const snap = await getDocs(query(collection(db, 'artifacts', appId, 'public', 'data', 'users'), where('uid', 'in', chunk)));
+        snap.forEach(d => { if (d.data().fcmToken) fcmTokens.push(d.data().fcmToken); });
+      }
+    }
+  } catch (err) { console.error("Token fetch error:", err); }
+
   const payload = {
     title, body, targetUids, fcmTokens,
     data: { ...data, click_action: 'FLUTTER_NOTIFICATION_CLICK' },
     android: { priority: 'high', notification: { sound: 'default', channel_id: 'tournament_alerts' } },
     apns: { headers: { 'apns-priority': '10' }, payload: { aps: { sound: 'default', 'content-available': 1 } } },
   };
-  const res = await fetch('https://esports-tournament-app-beta.vercel.app/api/sendNotification', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-  if (!res.ok) throw new Error(`Notification API returned ${res.status}`);
+
+  const res = await fetch('https://esports-tournament-app-beta.vercel.app/api/sendNotification', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => 'Unknown error');
+    throw new Error(`Notification API returned ${res.status}: ${errText}`);
+  }
   return res.json().catch(() => ({}));
 };
 
