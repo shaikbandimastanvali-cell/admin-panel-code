@@ -55,7 +55,6 @@ const copyText = async (text, successCallback) => {
   } catch (err) { console.error(err); alert("Copy failed"); }
 };
 
-// 🔥 FIX 2: DYNAMIC TOKEN FETCHING FOR PUSH NOTIFICATIONS 🔥
 const sendPushNotification = async ({ title, body, targetUids, data = {} }) => {
   let fcmTokens = [];
   try {
@@ -63,7 +62,6 @@ const sendPushNotification = async ({ title, body, targetUids, data = {} }) => {
       const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'users'));
       snap.forEach(d => { if (d.data().fcmToken && d.data().role === 'user') fcmTokens.push(d.data().fcmToken); });
     } else if (targetUids.length > 0) {
-      // Safe, dynamic fetch for specific users (Perfect for Lazy Loading)
       await Promise.all(targetUids.map(async (uid) => {
         if (!uid) return;
         const uSnap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', uid));
@@ -91,6 +89,7 @@ export default function AdminApp() {
   const [loading, setLoading] = useState(true);
   const [settings, setSettings] = useState({ appName: 'Elite Esports', currencySymbol: '🪙', currencyName: 'Coins', upiId: '', referralBonusPercent: 10, minWithdraw: 10, minReferralWithdraw: 300, termsAndConditions: 'Play fair.', maintenance: false, maintenanceMsg: 'Updating app...', externalSupportLink: 'https://customer-support-six-ashy.vercel.app/' });
 
+  // 🔥 ANTI-INSPECT / SOURCE CODE PROTECTION 🔥
   useEffect(() => {
     const handleContext = (e) => e.preventDefault();
     const handleKey = (e) => { if (e.keyCode === 123 || (e.ctrlKey && e.shiftKey && (e.keyCode === 73 || e.keyCode === 74 || e.keyCode === 67)) || (e.ctrlKey && e.keyCode === 85)) e.preventDefault(); };
@@ -104,7 +103,6 @@ export default function AdminApp() {
     init(); return onAuthStateChanged(auth, u => { setFbUser(u); setLoading(false); });
   }, []);
 
-  // LOAD LIGHTWEIGHT COLLECTIONS GLOBALLY
   useEffect(() => {
     if (!fbUser) return;
     const unsubs = ['games','modes'].map(c => onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', c), s => setData(p => ({ ...p, [c]: s.docs.map(d => ({ id: d.id, ...d.data() })) }))));
@@ -155,28 +153,8 @@ function AdminLayout({ u, data, setData, sets, out }) {
   const acc = (s) => u.role === 'admin' || (u.permissions||[]).includes(s);
   const navs = [{i:'dashboard',ic:Home,l:'Dashboard'},{i:'users',ic:Users,l:'Users'},{i:'games',ic:Gamepad2,l:'Games & Modes'},{i:'tournaments',ic:Trophy,l:'Tournaments'},{i:'deposits',ic:ArrowDownLeft,l:'Deposits'},{i:'withdraws',ic:ArrowUpRight,l:'Withdraws'},{i:'messages',ic:Bell,l:'Messages'},{i:'staff',ic:ShieldAlert,l:'Staff'},{i:'deviceBans',ic:ShieldAlert,l:'Device Bans'},{i:'settings',ic:Settings,l:'Settings'}];
 
-  // LAZY LOADING LOGIC
   useEffect(() => {
     let unsubs = [];
-
-    if (view === 'deposits' || view === 'withdraws') {
-      unsubs.push(onSnapshot(query(baseRef('transactions'), where('status', '==', 'pending')), snap => {
-        setData(p => {
-           const pend = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-           const hist = p.transactions.filter(x => x.status !== 'pending');
-           const merged = [...hist.filter(h => !pend.find(x => x.id === h.id)), ...pend].sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-           return { ...p, transactions: merged };
-        });
-      }));
-      unsubs.push(onSnapshot(query(baseRef('transactions'), orderBy('date', 'desc'), limit(150)), snap => {
-        setData(p => {
-           const hist = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-           const pend = p.transactions.filter(x => x.status === 'pending');
-           const merged = [...hist, ...pend.filter(x => !hist.find(h => h.id === x.id))].sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-           return { ...p, transactions: merged };
-        });
-      }));
-    }
 
     if (view === 'users') {
       unsubs.push(onSnapshot(query(baseRef('users'), orderBy('joinedDate', 'desc'), limit(100)), s => setData(p => ({ ...p, users: s.docs.map(d => ({ id: d.id, ...d.data() })) }))));
@@ -202,8 +180,8 @@ function AdminLayout({ u, data, setData, sets, out }) {
     users: <UserMgr md={setMd} s={sets} u={u}/>, 
     games: <GamesMgr md={setMd} u={u}/>, 
     tournaments: <TourneyMgr md={setMd} u={u} s={sets}/>,
-    deposits: <FinMgr t="deposit" md={setMd} s={sets} u={u} data={data}/>, 
-    withdraws: <FinMgr t="withdraw" md={setMd} s={sets} u={u} data={data}/>, 
+    deposits: <FinMgr t="deposit" md={setMd} s={sets} u={u}/>, 
+    withdraws: <FinMgr t="withdraw" md={setMd} s={sets} u={u}/>, 
     messages: <MessageMgr md={setMd} u={u}/>, 
     staff: <StaffMgr md={setMd} u={u}/>, 
     deviceBans: <DeviceBanMgr md={setMd} u={u}/>, 
@@ -284,7 +262,6 @@ function UniModal({ m, sm }) {
   );
 }
 
-// 🔥 DASHBOARD: RECALCULATE STATS BUTTON ADDED 🔥
 function Dash({ s }) {
   const [stats, setStats] = useState({ totalUsers: 0, totalDeposits: 0, totalWithdraws: 0, pendingDeposits: 0 });
   const [calculating, setCalculating] = useState(false);
@@ -418,8 +395,8 @@ function UserMgr({ md, s, u: adminUser }) {
     <div className="flex-1 overflow-auto"><table className="w-full text-left text-sm"><thead className="bg-slate-100 text-[10px] font-black uppercase text-slate-500 sticky top-0 z-10"><tr><th className="p-4">User</th><th className="p-4">Game Info</th><th className="p-4">Stats</th><th className="p-4">Status</th></tr></thead><tbody className="divide-y">{users.map(u=><tr key={u.uid} onClick={()=>setSu(u)} className="hover:bg-blue-50 cursor-pointer transition-colors"><td className="p-4"><div className="font-black text-base">{u.name}</div><div className="text-[10px] font-bold text-slate-400">{u.email}</div></td><td className="p-4"><div className="font-bold text-blue-600">{u.gameName||'N/A'}</div><div className="text-[10px] font-mono">{u.gameUid || u.uid}</div></td><td className="p-4 font-black text-xs space-x-2"><span className="text-emerald-600">{u.balance}B</span><span className="text-blue-600">{u.totalKills||0}K</span><span className="text-purple-600">{u.totalWinnings||0}W</span></td><td className="p-4">{u.isBanned?<span className="bg-rose-100 text-rose-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Banned</span>:<span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Active</span>}{u.isRooted && <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Rooted</span>}{!u.fcmToken && <span className="bg-slate-100 text-slate-500 px-2 py-1 rounded text-[9px] font-black uppercase">No Push</span>}</td></tr>)}</tbody></table></div></div>;
 }
 
-// 🔥 FIX 1: FIN MGR REJECTION BUG FIXED 🔥
-function FinMgr({ t, data, md, s, u: adminUser }) {
+// 🔥 FIN MGR: PENDING TX CARDS WITH DYNAMIC USER FETCH FOR 100% ACCURACY 🔥
+function FinMgr({ t, md, s, u: adminUser }) {
   const [pending, setPending] = useState([]);
   const [history, setHistory] = useState([]);
   const [cMsg, setCMsg] = useState('');
@@ -437,7 +414,6 @@ function FinMgr({ t, data, md, s, u: adminUser }) {
     t:'confirm',title:'Confirm',msg:`${st} request?`,
     onC:async ()=>{
       try {
-        // Fetch user completely outside the logic block so Rejection can use it to refund
         const userSnap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', tx.uid));
         const uu = userSnap.exists() ? userSnap.data() : null;
 
@@ -461,7 +437,6 @@ function FinMgr({ t, data, md, s, u: adminUser }) {
           } 
           await updateDoc(doc(db,'artifacts',appId,'public','data','transactions',tx.id),{status:'completed'});
         } else {
-           // 🔥 BUG FIXED: If rejecting a withdrawal, refund the money 🔥
            if (t==='withdraw' && uu) {
              if (tx.type==='referral_withdraw_pending') {
                await updateDoc(doc(db,'artifacts',appId,'public','data','users',tx.uid), { referralBalance: Number(uu.referralBalance||0) + Math.abs(tx.amount) });
@@ -485,35 +460,96 @@ function FinMgr({ t, data, md, s, u: adminUser }) {
   {cMsg && <div className="fixed top-5 left-1/2 -translate-x-1/2 bg-emerald-500 text-white px-4 py-2 rounded-xl z-50 font-black shadow-lg animate-in fade-in zoom-in">{cMsg}</div>}
   <h2 className="text-xl font-black uppercase mb-6 flex items-center gap-2"><Clock className="text-amber-500"/> Pending {t}s ({pending.length})</h2><div className="space-y-4 mb-8">
   
-  {pending.length===0?<div className="p-8 text-center font-bold text-slate-400 bg-slate-50 rounded-xl">All caught up!</div>:pending.map(x=>{
-    const upi = x.description?.includes('to ') ? x.description.split('to ')[1] : '';
-
-    return <div key={x.id} className="p-4 bg-amber-50/50 border border-amber-200 rounded-xl flex justify-between items-start">
-      <div className="flex-1 pr-4">
-        <div className="font-black text-3xl mb-1">{Math.abs(x.amount)}</div>
-        <div className="text-sm font-bold text-blue-600 uppercase">UID: {x.uid} {x.type==='referral_withdraw_pending'&&<span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded text-[9px] ml-2 tracking-widest">REFERRAL WITHDRAW</span>}</div>
-        <div className="text-xs font-bold text-slate-700 mt-1 flex items-center gap-2">{x.description} {upi && <button onClick={()=>cT(upi)} className="bg-blue-100 text-blue-700 p-1 rounded hover:bg-blue-200 cursor-pointer"><Copy className="w-3 h-3"/></button>}</div>
-        <div className="text-[10px] font-bold text-slate-500 mt-1 mb-3">{fDate(x.date)}</div>
-      </div>
-      <div className="flex flex-col gap-2 shrink-0">
-        <button onClick={()=>act(x,'reject')} className="px-5 py-3 bg-white text-rose-600 font-black uppercase text-xs rounded-lg border border-rose-200 cursor-pointer hover:bg-rose-50">Reject</button>
-        <button onClick={()=>act(x,'approve')} className="px-5 py-3 bg-emerald-500 text-white font-black uppercase text-xs rounded-lg cursor-pointer hover:bg-emerald-600">Approve</button>
-      </div>
-    </div>
-  })}</div>
+  {pending.length===0?<div className="p-8 text-center font-bold text-slate-400 bg-slate-50 rounded-xl">All caught up!</div>:pending.map(x=> <PendingTxCard key={x.id} x={x} act={act} cT={cT} s={s} /> )}</div>
 
   <div className="flex justify-between items-center mb-4 border-b pb-2">
     <h3 className="text-sm font-black uppercase tracking-widest text-slate-500">Recent History</h3>
   </div>
   <table className="w-full text-sm text-left"><thead className="bg-slate-100 text-[10px] uppercase font-black"><tr><th className="p-3">User UID</th><th className="p-3">Details</th><th className="p-3">Amount</th><th className="p-3">Status</th><th className="p-3">Date</th><th className="p-3">Action</th></tr></thead><tbody className="divide-y">{history.map(x=>{
     const upi = x.description?.includes('to ') ? x.description.split('to ')[1] : '';
-    return <tr key={x.id}><td className="p-3 font-bold">{x.uid} {x.type==='referral_withdraw_pending'&&<span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded text-[8px] ml-2">REF</span>}</td>
-    <td className="p-3 text-xs font-bold text-slate-600 flex items-center gap-2">{x.description} {upi && <button onClick={()=>cT(upi)} className="text-blue-500 hover:text-blue-700 cursor-pointer"><Copy className="w-3 h-3"/></button>}</td>
+    return <tr key={x.id}><td className="p-3 font-bold">{x.uid} {x.type==='referral_withdraw_pending'&&<span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded text-[8px] ml-2 block w-max mt-1">REF</span>}</td>
+    <td className="p-3 text-xs font-bold text-slate-600 flex flex-col gap-1">{x.description} {upi && <button onClick={()=>cT(upi)} className="bg-blue-100 text-blue-700 p-1 w-max rounded hover:bg-blue-200 cursor-pointer flex items-center gap-1"><Copy className="w-3 h-3"/> COPY</button>}</td>
     <td className="p-3 font-black">{Math.abs(x.amount)}</td><td className="p-3"><span className={`text-[9px] px-2 py-1 uppercase font-black rounded ${x.status==='completed'?'bg-emerald-100 text-emerald-700':'bg-rose-100 text-rose-700'}`}>{x.status}</span></td><td className="p-3 text-[11px] font-bold text-slate-500">{fDate(x.date)}</td><td className="p-3">
       {adminUser.role === 'admin' && <button onClick={()=> md({t:'confirm',title:'Delete History',msg:'Remove from panel?',onC:async()=>{try{await updateDoc(doc(db,'artifacts',appId,'public','data','transactions',x.id),{adminDeleted:true}); md({t:'alert',title:'Success',msg:'Updated successfully'})}catch(err){md({t:'err',title:'Error',msg:err.message})}}}) } className="bg-rose-100 text-rose-600 px-3 py-1 rounded text-xs font-black cursor-pointer">DELETE</button>}
     </td></tr>
   })}</tbody></table>
   </div>;
+}
+
+// 🔥 STANDALONE CARD TO DYNAMICALLY FETCH EXACT PENDING USER DATA 🔥
+function PendingTxCard({ x, act, cT, s }) {
+  const [uData, setUData] = useState(null);
+  const [stats, setStats] = useState({ deps: 0, depAmt: 0, wids: 0, widAmt: 0, rejDeps: 0, rejWids: 0, matches: 0 });
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchUserStats = async () => {
+      try {
+        const uSnap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', x.uid));
+        if (uSnap.exists() && isMounted) {
+          const u = uSnap.data();
+          setUData(u);
+          const matches = u.totalMatches || 0;
+          
+          const txSnap = await getDocs(query(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), where('uid', '==', x.uid)));
+          let deps=0, depAmt=0, wids=0, widAmt=0, rejDeps=0, rejWids=0;
+          txSnap.forEach(doc => {
+             const t = doc.data();
+             if (t.adminDeleted) return;
+             if (t.type.includes('deposit')) {
+                if (t.status === 'completed') { deps++; depAmt+=Number(t.amount); }
+                if (t.status === 'failed') rejDeps++;
+             } else if (t.type.includes('withdraw')) {
+                if (t.status === 'completed') { wids++; widAmt+=Math.abs(Number(t.amount)); }
+                if (t.status === 'failed') rejWids++;
+             }
+          });
+          if (isMounted) setStats({ deps, depAmt, wids, widAmt, rejDeps, rejWids, matches });
+        }
+      } catch(e) {}
+    };
+    fetchUserStats();
+    return () => { isMounted = false; };
+  }, [x.uid]);
+
+  const upi = x.description?.includes('to ') ? x.description.split('to ')[1] : '';
+
+  return (
+    <div className="p-4 bg-amber-50/50 border border-amber-200 rounded-xl flex justify-between items-start shadow-sm">
+      <div className="flex-1 pr-4">
+        <div className="font-black text-3xl mb-1 text-amber-600">{Math.abs(x.amount)} <span className="text-sm">{s.currencySymbol}</span></div>
+        <div className="text-sm font-black text-blue-600 uppercase">
+          {uData ? uData.name : 'Loading User...'} 
+          {x.type==='referral_withdraw_pending'&&<span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded text-[9px] ml-2 tracking-widest align-middle">REFERRAL WITHDRAW</span>}
+        </div>
+        
+        <div className="text-xs font-bold text-slate-500 mt-2 flex items-center gap-2">
+          <span className="bg-slate-200 text-slate-700 px-2 py-1 rounded">UID: {x.uid}</span> 
+          <button onClick={()=>cT(x.uid)} className="bg-blue-100 text-blue-700 p-1.5 rounded hover:bg-blue-200 cursor-pointer shadow-sm"><Copy className="w-3 h-3"/></button>
+        </div>
+        
+        <div className="text-xs font-bold text-slate-700 mt-2 flex items-center gap-2">
+          {x.description} 
+          {upi && <button onClick={()=>cT(upi)} className="bg-emerald-100 text-emerald-700 p-1.5 rounded hover:bg-emerald-200 cursor-pointer shadow-sm"><Copy className="w-3 h-3"/></button>}
+        </div>
+        
+        <div className="text-[10px] font-bold text-slate-400 mt-2 mb-3"><Clock className="inline w-3 h-3 mr-1" />{fDate(x.date)}</div>
+
+        {/* METRICS BLOCK */}
+        <div className="bg-white border border-amber-200 rounded-lg p-3 grid grid-cols-2 gap-y-2 gap-x-4 text-[10px] font-black uppercase tracking-widest text-slate-600 shadow-inner">
+          <div>Deps: <span className="text-emerald-600">{stats.deps} ({stats.depAmt} {s.currencySymbol})</span></div>
+          <div>Wids: <span className="text-blue-600">{stats.wids} ({stats.widAmt} {s.currencySymbol})</span></div>
+          <div>Rej Deps: <span className="text-rose-600">{stats.rejDeps}</span></div>
+          <div>Rej Wids: <span className="text-rose-600">{stats.rejWids}</span></div>
+          <div className="col-span-2 pt-1 border-t border-slate-100 mt-1">Games Played: <span className="text-indigo-600">{stats.matches}</span></div>
+        </div>
+      </div>
+      <div className="flex flex-col gap-3 shrink-0">
+        <button onClick={()=>act(x,'reject')} className="px-6 py-3 bg-white text-rose-600 font-black uppercase text-xs rounded-xl border border-rose-200 cursor-pointer hover:bg-rose-50 shadow-sm transition-transform active:scale-95"><XCircle className="w-4 h-4 mx-auto mb-1"/> Reject</button>
+        <button onClick={()=>act(x,'approve')} className="px-6 py-3 bg-emerald-500 text-white font-black uppercase text-xs rounded-xl cursor-pointer hover:bg-emerald-600 shadow-md transition-transform active:scale-95"><CheckCircle2 className="w-4 h-4 mx-auto mb-1"/> Approve</button>
+      </div>
+    </div>
+  );
 }
 
 function GamesMgr({ md, u }) {
@@ -719,7 +755,6 @@ function TourneyMgr({ md, u, s }) {
           </>}
           {(t.status==='upcoming'||t.status==='ongoing')&&<button onClick={()=>st(t,'cancelled')} className="px-4 py-2 bg-white text-rose-500 border font-black text-[10px] uppercase rounded-lg cursor-pointer">CANCEL</button>}
         </div>
-
         <div className="w-full mt-4 bg-slate-50 p-3 rounded-lg border text-xs">
           <div className="font-black text-slate-400 uppercase mb-2">Joined Players ({(t.joinedUsers||[]).length})</div>
           <div className="max-h-32 overflow-y-auto space-y-1">
