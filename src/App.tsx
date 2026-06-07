@@ -369,12 +369,12 @@ function FinMgr({ t, md, s, u: adminUser }) {
           const userSnap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', tx.uid));
           const uu = userSnap.exists() ? userSnap.data() : null;
 
-          if(t==='deposit') {
+if(t==='deposit') {
             if (uu) {
               await updateDoc(doc(db,'artifacts',appId,'public','data','users',tx.uid), {
                 balance: Number(uu.balance || 0) + Number(tx.amount),
                 depositBalance: Number(uu.depositBalance || 0) + Number(tx.amount),
-                totalDeposited: Number(uu.totalDeposited || 0) + Number(tx.amount) // 🔥 THE BIG READ SAVER 🔥
+                totalDeposited: Number(uu.totalDeposited || 0) + Number(tx.amount)
               });
               if (uu.referredBy && s.referralBonusPercent > 0) {
                 const refSnap = await getDoc(doc(db,'artifacts',appId,'public','data','users',uu.referredBy));
@@ -385,20 +385,21 @@ function FinMgr({ t, md, s, u: adminUser }) {
                 }
               }
             }
-          } else if (t==='withdraw') {
-            if (tx.type==='referral_withdraw_pending') {
-              if(uu) await updateDoc(doc(db,'artifacts',appId,'public','data','users',tx.uid), { referralBalance: Number(uu.referralBalance||0) + Math.abs(tx.amount) });
-            } else {
-              if (uu) {
-                await updateDoc(doc(db,'artifacts',appId,'public','data','users',tx.uid), {
-                  balance: Number(uu.balance || 0) + Math.abs(tx.amount),
-                  winningBalance: Number(uu.winningBalance || 0) + Math.abs(tx.amount)
-                });
-              }
-            }
-          }
+          } 
+          // 🔥 FIX: On Withdraw Approve, do NOTHING to the balance. It was deducted when requested.
           await updateDoc(doc(db,'artifacts',appId,'public','data','transactions',tx.id),{status:'completed'});
         } else {
+           // 🔥 FIX: On Reject, if it's a withdraw, REFUND the money back to the user!
+           if (t==='withdraw' && uu) {
+             if (tx.type==='referral_withdraw_pending') {
+               await updateDoc(doc(db,'artifacts',appId,'public','data','users',tx.uid), { referralBalance: Number(uu.referralBalance||0) + Math.abs(tx.amount) });
+             } else {
+               await updateDoc(doc(db,'artifacts',appId,'public','data','users',tx.uid), {
+                 balance: Number(uu.balance || 0) + Math.abs(tx.amount),
+                 winningBalance: Number(uu.winningBalance || 0) + Math.abs(tx.amount)
+               });
+             }
+           }
            await updateDoc(doc(db,'artifacts',appId,'public','data','transactions',tx.id),{status:'failed'});
         }
         md({t:'alert',title:'Success',msg:'Updated successfully'});
