@@ -548,48 +548,99 @@ function PendingTxCard({ x, uData, act, cT, s }) {
   );
 }
 
-// 🔥 NEW FULLY CUSTOMIZABLE LUCKY WHEEL MGR 🔥
+// 🔥 FIXED: LUCKY WHEEL MGR EXACTLY MATCHING USER PANEL LOGIC 🔥
 function LuckyWheelMgr({ md }) {
   const [stats, setStats] = useState({ spinsToday: 0, spinsAllTime: 0, coinsToday: 0, coinsAllTime: 0 });
   const [loading, setLoading] = useState(false);
 
+  // Loads whatever is currently saved in the stats document
   const loadData = async () => {
     setLoading(true);
     try {
       const d = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'luckyWheel'));
-      if (d.exists()) setStats(p => ({...p, ...d.data().stats}));
+      if (d.exists() && d.data().stats) setStats(p => ({...p, ...d.data().stats}));
     } catch(e){}
     setLoading(false);
   };
 
-  const saveStats = async () => {
+  useEffect(() => { loadData(); }, []);
+
+  // Physically scans the transactions collection to count actual spins and coins
+  const calculateFromDatabase = async () => {
+    setLoading(true);
+    try {
+      const tSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'));
+      const todayStr = new Date().toISOString().split('T')[0];
+      
+      let spinsToday = 0; let spinsAllTime = 0;
+      let coinsToday = 0; let coinsAllTime = 0;
+
+      tSnap.forEach(d => {
+         const tx = d.data();
+         // User panel saves wheel spins as type: 'lucky_wheel'
+         if (tx.type === 'lucky_wheel' && tx.status === 'completed' && !tx.adminDeleted) {
+            spinsAllTime++;
+            coinsAllTime += Number(tx.amount || 0);
+            if (tx.date && tx.date.startsWith(todayStr)) {
+               spinsToday++;
+               coinsToday += Number(tx.amount || 0);
+            }
+         }
+      });
+
+      const newStats = { spinsToday, spinsAllTime, coinsToday, coinsAllTime };
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'luckyWheel'), { stats: newStats }, { merge: true });
+      setStats(newStats);
+      md({t:'alert', title:'Success', msg:'Stats accurately recalculated from database!'});
+    } catch(e) { md({t:'err', title:'Error', msg:e.message}); }
+    setLoading(false);
+  };
+
+  // Allows Admin to fake/override the numbers manually
+  const saveManualOverride = async () => {
     try {
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'luckyWheel'), { stats }, { merge: true });
-      md({t:'alert', title:'Success', msg:'Lucky Wheel Stats updated manually!'});
+      md({t:'alert', title:'Success', msg:'Database Overwritten with Manual Numbers!'});
     } catch(e) { md({t:'err', title:'Error', msg:e.message}); }
   };
 
-  const bx = (label, key) => (
-    <div className="bg-slate-50 p-4 border rounded-xl shadow-sm">
+  const bx = (label, key, color) => (
+    <div className={`bg-slate-50 p-5 border rounded-2xl shadow-sm relative overflow-hidden`}>
       <label className="text-[10px] font-black uppercase text-slate-500 block mb-2">{label}</label>
-      <input type="number" value={stats[key]} onChange={e=>setStats({...stats, [key]: Number(e.target.value)})} className="w-full p-3 border rounded font-black outline-none text-blue-600 text-xl"/>
+      <input type="number" value={stats[key]} onChange={e=>setStats({...stats, [key]: Number(e.target.value)})} className={`w-full p-2 bg-transparent font-black outline-none text-3xl ${color}`}/>
     </div>
   );
 
   return <div>
     <SectionHeader title="Lucky Wheel Manager" onRefresh={loadData} loading={loading} />
-    <div className="bg-white p-6 rounded-2xl border shadow-sm">
+    
+    <div className="bg-white p-6 rounded-2xl border shadow-sm mb-6">
       <div className="flex justify-between items-center mb-6 pb-4 border-b">
-         <h2 className="text-xl font-black uppercase tracking-widest text-slate-800">Manually Edit Stats</h2>
-         <button onClick={saveStats} className="bg-emerald-600 text-white px-6 py-3 rounded-lg font-black uppercase text-xs cursor-pointer hover:bg-emerald-700 shadow-md flex items-center gap-2"><CheckCircle2 className="w-4 h-4"/> Override Database</button>
+         <div>
+           <h2 className="text-xl font-black uppercase tracking-widest text-slate-800">Live Statistics</h2>
+           <p className="text-xs font-bold text-slate-500 mt-1">Spin costs and rewards are hardcoded in the app (5 Matches = 1 Spin).</p>
+         </div>
+         <button onClick={calculateFromDatabase} disabled={loading} className="bg-blue-600 text-white px-6 py-3 rounded-xl font-black uppercase text-xs cursor-pointer hover:bg-blue-700 shadow-md flex items-center gap-2 disabled:opacity-50">
+           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`}/> Recalculate From Database
+         </button>
       </div>
+
       <div className="grid md:grid-cols-2 gap-6">
-         {bx("Spins Today", "spinsToday")}
-         {bx("Spins All Time", "spinsAllTime")}
-         {bx("Coins Given Today", "coinsToday")}
-         {bx("Coins Given All Time", "coinsAllTime")}
+         {bx("Spins Today", "spinsToday", "text-blue-600")}
+         {bx("Spins All Time", "spinsAllTime", "text-blue-600")}
+         {bx("Coins Given Today", "coinsToday", "text-emerald-500")}
+         {bx("Coins Given All Time", "coinsAllTime", "text-emerald-500")}
       </div>
-      <p className="text-xs font-bold text-slate-400 mt-6 bg-slate-50 p-3 rounded border">Note: Modifying these numbers instantly changes what is displayed on the user panel.</p>
+    </div>
+
+    <div className="bg-amber-50 p-6 rounded-2xl border border-amber-200 shadow-sm flex justify-between items-center">
+      <div>
+         <h3 className="font-black text-amber-800 uppercase tracking-widest">Manual Override</h3>
+         <p className="text-xs font-bold text-amber-600/80 mt-1">Changed the numbers above? Click here to force save them to the database.</p>
+      </div>
+      <button onClick={saveManualOverride} className="bg-amber-500 text-white px-6 py-3 rounded-xl font-black uppercase text-xs cursor-pointer hover:bg-amber-600 shadow-md flex items-center gap-2">
+         <Edit className="w-4 h-4"/> Force Save Numbers
+      </button>
     </div>
   </div>;
 }
