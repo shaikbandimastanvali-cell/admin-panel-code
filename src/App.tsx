@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, updateDoc, addDoc, deleteDoc, enableIndexedDbPersistence, query, orderBy, limit, where, getDoc, getDocs, or } from 'firebase/firestore';
-import { Home, Trophy, User as UIcon, Wallet, Settings, LogOut, Users, Gamepad2, Plus, Edit, Trash2, Check, X, Search, Menu, ShieldAlert, Clock, ArrowUpRight, ArrowDownLeft, Info, PlayCircle, ChevronRight, CheckCircle2, Loader2, Link as LinkIcon, XCircle, Bell, Copy, RefreshCw, RefreshCcw, Dices } from 'lucide-react';
+import { getFirestore, collection, doc, setDoc, updateDoc, addDoc, deleteDoc, enableIndexedDbPersistence, query, orderBy, limit, where, getDoc, getDocs, or, onSnapshot } from 'firebase/firestore';
+import { Home, Trophy, User as UIcon, Wallet, Settings, LogOut, Users, Gamepad2, Plus, Edit, Trash2, Check, X, Search, Menu, ShieldAlert, Clock, ArrowUpRight, ArrowDownLeft, Info, PlayCircle, ChevronRight, CheckCircle2, Loader2, Link as LinkIcon, XCircle, Bell, Copy, RefreshCw, Dices } from 'lucide-react';
 
 // --- FIREBASE CONFIG ---
 const firebaseConfig = {
@@ -17,11 +17,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-try {
-  enableIndexedDbPersistence(db).catch((err) => {
-    if (err.code === 'failed-precondition') console.warn('Multiple tabs open.');
-  });
-} catch (e) { console.warn("Persistence catch error:", e); }
+try { enableIndexedDbPersistence(db).catch(() => {}); } catch (e) {}
 
 const appId = 'ff-tournament-live-db';
 const baseRef = (col) => collection(db, 'artifacts', appId, 'public', 'data', col);
@@ -49,6 +45,7 @@ const copyText = async (text, successCallback) => {
   } catch (err) { alert("Copy failed"); }
 };
 
+// 🔥 FIX: ROBUST CHUNKED TOKEN FETCHER FOR NOTIFICATIONS 🔥
 const sendPushNotification = async ({ title, body, targetUids, data = {} }) => {
   let fcmTokens = [];
   try {
@@ -56,11 +53,12 @@ const sendPushNotification = async ({ title, body, targetUids, data = {} }) => {
       const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'users'));
       snap.forEach(d => { if (d.data().fcmToken && d.data().role === 'user') fcmTokens.push(d.data().fcmToken); });
     } else if (targetUids.length > 0) {
-      await Promise.all(targetUids.map(async (uid) => {
-        if (!uid) return;
-        const uSnap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', uid));
-        if (uSnap.exists() && uSnap.data().fcmToken) fcmTokens.push(uSnap.data().fcmToken);
-      }));
+      // Fetch in chunks of 10 to strictly obey Firebase query limits
+      for (let i = 0; i < targetUids.length; i += 10) {
+        const chunk = targetUids.slice(i, i + 10);
+        const snap = await getDocs(query(baseRef('users'), where('uid', 'in', chunk)));
+        snap.forEach(d => { if (d.data().fcmToken) fcmTokens.push(d.data().fcmToken); });
+      }
     }
   } catch (err) { console.error("Token fetch error:", err); }
 
@@ -123,7 +121,7 @@ export default function AdminApp() {
   return <AdminLayout u={admin} data={data} setData={setData} sets={settings} out={() => {localStorage.removeItem('admin_uid'); setAdmin(null);}} />;
 }
 
-// 🔥 REUSABLE HEADER FOR ALL TABS (SAVES READS BY REQUIRING MANUAL CLICKS) 🔥
+// 🔥 REUSABLE HEADER 🔥
 function SectionHeader({ title, onRefresh, loading }) {
   return (
     <div className="flex justify-between items-center bg-white p-4 rounded-2xl border shadow-sm mb-6">
@@ -142,7 +140,7 @@ function AdminLayout({ u, data, setData, sets, out }) {
 
   const vMap = {
     dashboard: <Dash s={sets}/>, 
-    users: <UserMgr md={setMd} s={sets} u={u}/>, 
+    users: <UserMgr md={setMd} s={sets} u={u} cache={data} setCache={setData}/>, 
     games: <GamesMgr md={setMd} u={u} cache={data} setCache={setData}/>, 
     tournaments: <TourneyMgr md={setMd} u={u} s={sets} cache={data} setCache={setData}/>,
     deposits: <FinMgr t="deposit" md={setMd} s={sets} u={u} cache={data} setCache={setData}/>, 
@@ -237,6 +235,7 @@ function Dash({ s }) {
   const handleRecalculate = async () => {
     setCalculating(true);
     try {
+      // Manual explicit scan to bypass all caching and listeners
       const uSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'users'));
       const tSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'));
 
@@ -297,8 +296,7 @@ function Dash({ s }) {
 }
 
 // 🔥 USERS MGR: ADVANCED FILTERS AND STRICT QUERYING 🔥
-function UserMgr({ md, s, u: adminUser }) {
-  const [users, setUsers] = useState([]);
+function UserMgr({ md, s, u: adminUser, cache, setCache }) {
   const [q, sq] = useState(''); 
   const [su, setSu] = useState(null); 
   const [sp, setSp] = useState(false);
@@ -310,18 +308,26 @@ function UserMgr({ md, s, u: adminUser }) {
   const loadData = async () => {
     setLoading(true);
     try {
-      let qRef = query(baseRef('users'), orderBy(srt, 'desc'), limit(50));
+      // In-memory fallback sorting to avoid Firebase Index requirements
+      const snap = await getDocs(query(baseRef('users'), limit(500))); 
+      let allU = snap.docs.map(d => ({id: d.id, ...d.data()}));
+      
       if (q.length > 2) {
-         // Firestore dynamic OR query for Game UID, UID, Game Name, Email
-         qRef = query(baseRef('users'), or(where('email', '==', q), where('uid', '==', q), where('gameUid', '==', q), where('gameName', '==', q)), limit(20));
+         const search = q.toLowerCase();
+         allU = allU.filter(x => (x.email||'').toLowerCase().includes(search) || (x.uid||'').toLowerCase().includes(search) || (x.gameUid||'').toLowerCase().includes(search) || (x.gameName||'').toLowerCase().includes(search));
       }
-      const snap = await getDocs(qRef);
-      setUsers(snap.docs.map(d => ({id: d.id, ...d.data()})));
+
+      allU.sort((a,b) => {
+        if (srt === 'joinedDate') return new Date(b.joinedDate).getTime() - new Date(a.joinedDate).getTime();
+        return (Number(b[srt])||0) - (Number(a[srt])||0);
+      });
+
+      setCache(p => ({...p, users: allU.slice(0, 100)}));
     } catch(e) { console.error(e); }
     setLoading(false);
   };
 
-  useEffect(() => { loadData(); }, [q, srt]);
+  const users = cache.users || [];
 
   useEffect(() => {
     if (!su) { setInvited([]); return; }
@@ -358,49 +364,53 @@ function UserMgr({ md, s, u: adminUser }) {
     );
   }
 
-  return <div className="bg-white rounded-2xl border flex flex-col h-[80vh]">
+  return <div>
+    <SectionHeader title="Users Management" onRefresh={loadData} loading={loading} />
+    <div className="bg-white rounded-2xl border flex flex-col h-[70vh]">
     <div className="p-4 bg-slate-50 border-b flex justify-between items-center flex-wrap gap-3">
       <div className="flex gap-3 flex-1 min-w-[300px]">
         <input type="text" placeholder="Search Game UID, Name, Email..." value={q} onChange={e=>sq(e.target.value)} className="p-2 border rounded-lg font-bold text-sm flex-1 outline-none"/>
         <select value={srt} onChange={e=>setSrt(e.target.value)} className="p-2 border rounded-lg font-bold text-sm uppercase text-slate-600 outline-none cursor-pointer">
           <option value="joinedDate">Date Joined</option><option value="balance">Top Balance</option><option value="totalWinnings">Top Earners</option><option value="depositBalance">Top Deposits</option><option value="totalRefers">Top Referrals</option>
         </select>
-        <button onClick={loadData} disabled={loading} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-black uppercase text-xs cursor-pointer"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`}/></button>
+        <button onClick={loadData} disabled={loading} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-black uppercase text-xs cursor-pointer shadow-sm"><Search className="w-4 h-4"/></button>
       </div>
     </div>
-    <div className="flex-1 overflow-auto"><table className="w-full text-left text-sm"><thead className="bg-slate-100 text-[10px] font-black uppercase text-slate-500 sticky top-0 z-10"><tr><th className="p-4">User</th><th className="p-4">Game Info</th><th className="p-4">Stats</th><th className="p-4">Status</th></tr></thead><tbody className="divide-y">{users.map(u=><tr key={u.uid} onClick={()=>setSu(u)} className="hover:bg-blue-50 cursor-pointer transition-colors"><td className="p-4"><div className="font-black text-base">{u.name}</div><div className="text-[10px] font-bold text-slate-400">{u.email}</div></td><td className="p-4"><div className="font-bold text-blue-600">{u.gameName||'N/A'}</div><div className="text-[10px] font-mono font-bold bg-slate-100 px-1 rounded w-max mt-1">UID: {u.gameUid || 'N/A'}</div></td><td className="p-4 font-black text-xs space-x-2"><span className="text-emerald-600">{u.balance}B</span><span className="text-blue-600">{u.totalKills||0}K</span><span className="text-purple-600">{u.totalWinnings||0}W</span></td><td className="p-4">{u.isBanned?<span className="bg-rose-100 text-rose-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Banned</span>:<span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Active</span>}{u.isRooted && <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Rooted</span>}{!u.fcmToken && <span className="bg-slate-100 text-slate-500 px-2 py-1 rounded text-[9px] font-black uppercase">No Push</span>}</td></tr>)}</tbody></table></div></div>;
+    <div className="flex-1 overflow-auto"><table className="w-full text-left text-sm"><thead className="bg-slate-100 text-[10px] font-black uppercase text-slate-500 sticky top-0 z-10"><tr><th className="p-4">User</th><th className="p-4">Game Info</th><th className="p-4">Stats</th><th className="p-4">Status</th></tr></thead><tbody className="divide-y">{users.length===0?<tr><td colSpan="4" className="p-8 text-center text-slate-400 font-bold">Click Refresh Data or Search</td></tr>:users.map(u=><tr key={u.uid} onClick={()=>setSu(u)} className="hover:bg-blue-50 cursor-pointer transition-colors"><td className="p-4"><div className="font-black text-base">{u.name}</div><div className="text-[10px] font-bold text-slate-400">{u.email}</div></td><td className="p-4"><div className="font-bold text-blue-600">{u.gameName||'N/A'}</div><div className="text-[10px] font-mono font-bold bg-slate-100 px-1 rounded w-max mt-1">UID: {u.gameUid || 'N/A'}</div></td><td className="p-4 font-black text-xs space-x-2"><span className="text-emerald-600">{u.balance}B</span><span className="text-blue-600">{u.totalKills||0}K</span><span className="text-purple-600">{u.totalWinnings||0}W</span></td><td className="p-4">{u.isBanned?<span className="bg-rose-100 text-rose-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Banned</span>:<span className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Active</span>}{u.isRooted && <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded text-[9px] font-black uppercase mr-1">Rooted</span>}{!u.fcmToken && <span className="bg-slate-100 text-slate-500 px-2 py-1 rounded text-[9px] font-black uppercase">No Push</span>}</td></tr>)}</tbody></table></div></div></div>;
 }
 
-// 🔥 FIN MGR: FIRST TIME VS REPEATED WITHDRAWAL TABS + MANUAL FETCH 🔥
+// 🔥 FIN MGR: REAL-TIME PENDING + MANUAL HISTORY + TABS 🔥
 function FinMgr({ t, md, s, u: adminUser, cache, setCache }) {
   const [loading, setLoading] = useState(false);
   const [cMsg, setCMsg] = useState('');
   const [wTab, setWTab] = useState('all'); // 'all', 'first', 'repeated'
 
-  const loadData = async () => {
+  // 🔥 RESTORED: Realtime listener exclusively for pending requests!
+  useEffect(() => {
+    const unsub = onSnapshot(query(baseRef('transactions'), where('status', '==', 'pending')), async (snap) => {
+      const raw = snap.docs.map(d => ({id: d.id, ...d.data()}));
+      const enriched = [];
+      for (const tx of raw) {
+        if (t === 'withdraw' && !tx.type.includes('withdraw')) continue;
+        if (t === 'deposit' && !tx.type.includes('deposit')) continue;
+        const uSnap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', tx.uid));
+        enriched.push({...tx, user: uSnap.exists() ? uSnap.data() : {}});
+      }
+      setCache(p => ({...p, [`${t}_pending`]: enriched.sort((a,b)=>new Date(b.date).getTime()-new Date(a.date).getTime()) }));
+    });
+    return () => unsub();
+  }, [t, setCache]);
+
+  const loadHistory = async () => {
     setLoading(true);
     try {
-      const pSnap = await getDocs(query(baseRef('transactions'), where('type', 'in', t === 'withdraw' ? ['withdraw_pending', 'referral_withdraw_pending'] : ['deposit_pending']), where('status', '==', 'pending')));
-      const pRaw = pSnap.docs.map(d => ({id: d.id, ...d.data()}));
-      
-      // Massive Optimization: Fetch user docs to attach true withdraw count & Game UIDs securely without full loops
-      const uids = [...new Set(pRaw.map(x=>x.uid))];
-      const uMap = {};
-      for(let i=0; i<uids.length; i+=10) {
-         const chunk = uids.slice(i, i+10);
-         const uSnap = await getDocs(query(baseRef('users'), where('uid', 'in', chunk)));
-         uSnap.forEach(d => { uMap[d.data().uid] = d.data(); });
-      }
-      const enrichedPending = pRaw.map(x => ({ ...x, user: uMap[x.uid] || {} }));
-
-      const hSnap = await getDocs(query(baseRef('transactions'), where('type', 'in', t === 'withdraw' ? ['withdraw_pending', 'referral_withdraw_pending'] : ['deposit_pending']), where('status', 'in', ['completed', 'failed']), orderBy('date', 'desc'), limit(50)));
-      
-      setCache(prev => ({...prev, [`${t}_pending`]: enrichedPending, [`${t}_history`]: hSnap.docs.map(d=>({id:d.id, ...d.data()})) }));
-    } catch(e) { console.error(e); }
+      // In-memory filter to prevent composite index errors
+      const hSnap = await getDocs(query(baseRef('transactions'), orderBy('date', 'desc'), limit(150)));
+      const filtered = hSnap.docs.map(d=>({id:d.id, ...d.data()})).filter(x => x.status !== 'pending' && !x.adminDeleted && (t === 'withdraw' ? x.type.includes('withdraw') : x.type.includes('deposit')));
+      setCache(p => ({...p, [`${t}_history`]: filtered }));
+    } catch(e) {}
     setLoading(false);
   };
-
-  useEffect(() => { if (!cache[`${t}_pending`]) loadData(); }, [t]);
 
   const act = (tx, st) => md({
     t:'confirm',title:'Confirm',msg:`${st} request?`,
@@ -415,7 +425,6 @@ function FinMgr({ t, md, s, u: adminUser, cache, setCache }) {
               if (refSnap.exists()) await updateDoc(doc(db,'artifacts',appId,'public','data','users',uu.referredBy), { referralBalance: Number(refSnap.data().referralBalance||0) + (Number(tx.amount)*Number(s.referralBonusPercent)/100) });
             }
           } else {
-             // Increment Withdraw Count on successful approval
              await updateDoc(doc(db,'artifacts',appId,'public','data','users',tx.uid), { totalWithdrawsCount: Number(uu.totalWithdrawsCount||0) + 1 });
           }
           await updateDoc(doc(db,'artifacts',appId,'public','data','transactions',tx.id),{status:'completed'});
@@ -427,7 +436,7 @@ function FinMgr({ t, md, s, u: adminUser, cache, setCache }) {
            await updateDoc(doc(db,'artifacts',appId,'public','data','transactions',tx.id),{status:'failed'});
         }
         md({t:'alert',title:'Success',msg:'Updated successfully'});
-        loadData();
+        loadHistory();
       } catch(err) { md({t:'err',title:'Error',msg:err.message}); }
     }
   });
@@ -437,7 +446,7 @@ function FinMgr({ t, md, s, u: adminUser, cache, setCache }) {
   
   const fPending = pending.filter(x => {
     if (t !== 'withdraw') return true;
-    const wCount = x.user.totalWithdrawsCount || 0;
+    const wCount = x.user?.totalWithdrawsCount || 0;
     if (wTab === 'first') return wCount === 0;
     if (wTab === 'repeated') return wCount > 0;
     return true;
@@ -446,12 +455,12 @@ function FinMgr({ t, md, s, u: adminUser, cache, setCache }) {
   const cT = (text) => { copyText(text); setCMsg('Copied!'); setTimeout(()=>setCMsg(''), 2000); };
 
   return <div>
-  <SectionHeader title={`${t}s`} onRefresh={loadData} loading={loading} />
+  <SectionHeader title={`${t}s History`} onRefresh={loadHistory} loading={loading} />
   <div className="bg-white p-6 rounded-2xl border shadow-sm">
   {cMsg && <div className="fixed top-5 left-1/2 -translate-x-1/2 bg-emerald-500 text-white px-4 py-2 rounded-xl z-50 font-black shadow-lg animate-in fade-in zoom-in">{cMsg}</div>}
   
   <div className="flex justify-between items-center mb-6 border-b pb-4">
-    <h2 className="text-xl font-black uppercase flex items-center gap-2"><Clock className="text-amber-500"/> Pending Requests ({fPending.length})</h2>
+    <h2 className="text-xl font-black uppercase flex items-center gap-2"><Clock className="text-amber-500 animate-pulse"/> Live Pending ({fPending.length})</h2>
     {t === 'withdraw' && <div className="flex gap-2">
        <button onClick={()=>setWTab('all')} className={`px-4 py-2 text-xs font-black uppercase rounded-lg cursor-pointer ${wTab==='all'?'bg-blue-600 text-white':'bg-slate-100 text-slate-500'}`}>All</button>
        <button onClick={()=>setWTab('first')} className={`px-4 py-2 text-xs font-black uppercase rounded-lg cursor-pointer ${wTab==='first'?'bg-emerald-600 text-white':'bg-slate-100 text-slate-500'}`}>First Time</button>
@@ -460,21 +469,20 @@ function FinMgr({ t, md, s, u: adminUser, cache, setCache }) {
   </div>
   
   <div className="space-y-4 mb-8">
-  {fPending.length===0?<div className="p-8 text-center font-bold text-slate-400 bg-slate-50 rounded-xl">All caught up!</div>:fPending.map(x=> <PendingTxCard key={x.id} x={x} uData={x.user} act={act} cT={cT} s={s} /> )}</div>
+  {fPending.length===0?<div className="p-8 text-center font-bold text-slate-400 bg-slate-50 rounded-xl">All caught up! New requests will pop up here instantly.</div>:fPending.map(x=> <PendingTxCard key={x.id} x={x} uData={x.user} act={act} cT={cT} s={s} /> )}</div>
 
   <div className="flex justify-between items-center mb-4 border-b pb-2"><h3 className="text-sm font-black uppercase tracking-widest text-slate-500">Recent History</h3></div>
-  <table className="w-full text-sm text-left"><thead className="bg-slate-100 text-[10px] uppercase font-black"><tr><th className="p-3">User UID</th><th className="p-3">Details</th><th className="p-3">Amount</th><th className="p-3">Status</th><th className="p-3">Date</th><th className="p-3">Action</th></tr></thead><tbody className="divide-y">{history.filter(x => !x.adminDeleted).map(x=>{
+  <table className="w-full text-sm text-left"><thead className="bg-slate-100 text-[10px] uppercase font-black"><tr><th className="p-3">User UID</th><th className="p-3">Details</th><th className="p-3">Amount</th><th className="p-3">Status</th><th className="p-3">Date</th><th className="p-3">Action</th></tr></thead><tbody className="divide-y">{history.length===0?<tr><td colSpan="6" className="text-center p-8 text-slate-400 font-bold">Click Refresh Data to load history</td></tr>:history.filter(x => !x.adminDeleted).map(x=>{
     const upi = x.description?.includes('to ') ? x.description.split('to ')[1] : '';
     return <tr key={x.id}><td className="p-3 font-bold">{x.uid} {x.type==='referral_withdraw_pending'&&<span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded text-[8px] ml-2 block w-max mt-1">REF</span>}</td>
     <td className="p-3 text-xs font-bold text-slate-600 flex flex-col gap-1">{x.description} {upi && <button onClick={()=>cT(upi)} className="bg-blue-100 text-blue-700 p-1 w-max rounded hover:bg-blue-200 cursor-pointer flex items-center gap-1"><Copy className="w-3 h-3"/> COPY</button>}</td>
     <td className="p-3 font-black">{Math.abs(x.amount)}</td><td className="p-3"><span className={`text-[9px] px-2 py-1 uppercase font-black rounded ${x.status==='completed'?'bg-emerald-100 text-emerald-700':'bg-rose-100 text-rose-700'}`}>{x.status}</span></td><td className="p-3 text-[11px] font-bold text-slate-500">{fDate(x.date)}</td><td className="p-3">
-      {adminUser.role === 'admin' && <button onClick={()=> md({t:'confirm',title:'Delete History',msg:'Remove from panel?',onC:async()=>{try{await updateDoc(doc(db,'artifacts',appId,'public','data','transactions',x.id),{adminDeleted:true}); md({t:'alert',title:'Success',msg:'Updated successfully'}); loadData();}catch(err){md({t:'err',title:'Error',msg:err.message})}}}) } className="bg-rose-100 text-rose-600 px-3 py-1 rounded text-xs font-black cursor-pointer">DELETE</button>}
+      {adminUser.role === 'admin' && <button onClick={()=> md({t:'confirm',title:'Delete History',msg:'Remove from panel?',onC:async()=>{try{await updateDoc(doc(db,'artifacts',appId,'public','data','transactions',x.id),{adminDeleted:true}); md({t:'alert',title:'Success',msg:'Updated successfully'}); loadHistory();}catch(err){md({t:'err',title:'Error',msg:err.message})}}}) } className="bg-rose-100 text-rose-600 px-3 py-1 rounded text-xs font-black cursor-pointer">DELETE</button>}
     </td></tr>
   })}</tbody></table>
   </div></div>;
 }
 
-// 🔥 STANDALONE CARD WITH SECURE PRE-FETCHED GAME UID 🔥
 function PendingTxCard({ x, uData, act, cT, s }) {
   const [stats, setStats] = useState({ deps: 0, depAmt: 0, wids: 0, widAmt: 0, rejDeps: 0, rejWids: 0 });
 
@@ -482,7 +490,7 @@ function PendingTxCard({ x, uData, act, cT, s }) {
     let isMounted = true;
     const fetchHistoryStats = async () => {
       try {
-        const txSnap = await getDocs(query(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'), where('uid', '==', x.uid)));
+        const txSnap = await getDocs(query(baseRef('transactions'), where('uid', '==', x.uid)));
         let deps=0, depAmt=0, wids=0, widAmt=0, rejDeps=0, rejWids=0;
         txSnap.forEach(doc => {
            const t = doc.data();
@@ -511,7 +519,6 @@ function PendingTxCard({ x, uData, act, cT, s }) {
           {uData?.gameUid && <button onClick={()=>cT(uData.gameUid)} className="bg-blue-100 text-blue-700 p-1.5 rounded hover:bg-blue-200 cursor-pointer shadow-sm"><Copy className="w-3 h-3"/></button>}
           <span className="text-[9px] uppercase tracking-widest block w-full mt-1">SYS UID: {x.uid}</span>
         </div>
-        
         <div className="text-xs font-bold text-slate-700 mt-2 flex items-center gap-2">
           {x.description} {upi && <button onClick={()=>cT(upi)} className="bg-emerald-100 text-emerald-700 p-1.5 rounded hover:bg-emerald-200 cursor-pointer shadow-sm"><Copy className="w-3 h-3"/></button>}
         </div>
@@ -536,64 +543,48 @@ function PendingTxCard({ x, uData, act, cT, s }) {
   );
 }
 
-// 🔥 NEW: LUCKY WHEEL MGR 🔥
-function LuckyWheelMgr({ md, u }) {
-  const [loading, setLoading] = useState(false);
+// 🔥 NEW FULLY CUSTOMIZABLE LUCKY WHEEL MGR 🔥
+function LuckyWheelMgr({ md }) {
   const [stats, setStats] = useState({ spinsToday: 0, spinsAllTime: 0, coinsToday: 0, coinsAllTime: 0 });
-  const [config, setConfig] = useState({ active: true, costPerSpin: 10, slice1: 0, slice2: 5, slice3: 10, slice4: 50, slice5: 100, slice6: 500 });
-  const [isSaving, setIsSaving] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const loadData = async () => {
     setLoading(true);
     try {
-       const sDoc = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'luckyWheel'));
-       if (sDoc.exists()) {
-          setConfig(prev => ({...prev, ...sDoc.data().config}));
-          setStats(prev => ({...prev, ...sDoc.data().stats}));
-       }
-    } catch(e) { console.error(e); }
+      const d = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'luckyWheel'));
+      if (d.exists()) setStats(p => ({...p, ...d.data().stats}));
+    } catch(e){}
     setLoading(false);
   };
 
-  useEffect(() => { loadData(); }, []);
-
-  const saveConfig = async () => {
-    setIsSaving(true);
+  const saveStats = async () => {
     try {
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'luckyWheel'), { config }, { merge: true });
-      md({t:'alert', title:'Success', msg:'Wheel Config Saved!'});
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'luckyWheel'), { stats }, { merge: true });
+      md({t:'alert', title:'Success', msg:'Lucky Wheel Stats updated manually!'});
     } catch(e) { md({t:'err', title:'Error', msg:e.message}); }
-    setIsSaving(false);
   };
 
-  const bx = (l, tv, av, c) => <div className="bg-white p-6 rounded-2xl border shadow-sm relative"><div className="text-sm font-black uppercase text-slate-400 mb-4">{l}</div><div className="grid grid-cols-2 gap-2"><div className="border-r pr-2"><div className="text-[10px] font-bold text-slate-400 uppercase">Today</div><div className={`text-2xl font-black ${c}`}>{tv}</div></div><div><div className="text-[10px] font-bold text-slate-400 uppercase">All Time</div><div className={`text-2xl font-black ${c}`}>{av}</div></div></div></div>;
+  const bx = (label, key) => (
+    <div className="bg-slate-50 p-4 border rounded-xl shadow-sm">
+      <label className="text-[10px] font-black uppercase text-slate-500 block mb-2">{label}</label>
+      <input type="number" value={stats[key]} onChange={e=>setStats({...stats, [key]: Number(e.target.value)})} className="w-full p-3 border rounded font-black outline-none text-blue-600 text-xl"/>
+    </div>
+  );
 
   return <div>
-    <SectionHeader title="Lucky Wheel Settings" onRefresh={loadData} loading={loading} />
-    <div className="space-y-6">
-       <div className="grid md:grid-cols-2 gap-4">
-          {bx("Total Spins", stats.spinsToday, stats.spinsAllTime, "text-blue-600")}
-          {bx("Coins Rewarded", stats.coinsToday, stats.coinsAllTime, "text-emerald-600")}
-       </div>
-       <div className="bg-white p-6 rounded-2xl border shadow-sm space-y-6">
-          <div className="flex justify-between items-center border-b pb-4">
-             <h3 className="font-black text-lg uppercase tracking-widest">Reward Configuration</h3>
-             <button onClick={saveConfig} disabled={isSaving} className="bg-blue-600 text-white px-6 py-2 rounded-lg font-black uppercase text-xs cursor-pointer">{isSaving?'Saving...':'Save Changes'}</button>
-          </div>
-          <div className="flex items-center gap-4 mb-4">
-             <label className="font-black text-sm uppercase text-slate-600">Wheel Active Status:</label>
-             <input type="checkbox" checked={config.active} onChange={e=>setConfig({...config, active: e.target.checked})} className="w-6 h-6 cursor-pointer" />
-          </div>
-          <div className="grid md:grid-cols-2 gap-4">
-             <div className="bg-slate-50 p-4 border rounded-xl"><label className="text-[10px] font-black uppercase text-slate-400 block mb-2">Cost Per Spin (Coins)</label><input type="number" value={config.costPerSpin} onChange={e=>setConfig({...config, costPerSpin: Number(e.target.value)})} className="w-full p-3 border rounded font-black outline-none text-rose-600"/></div>
-             <div className="bg-slate-50 p-4 border rounded-xl"><label className="text-[10px] font-black uppercase text-slate-400 block mb-2">Slice 1 Reward</label><input type="number" value={config.slice1} onChange={e=>setConfig({...config, slice1: Number(e.target.value)})} className="w-full p-3 border rounded font-black outline-none text-emerald-600"/></div>
-             <div className="bg-slate-50 p-4 border rounded-xl"><label className="text-[10px] font-black uppercase text-slate-400 block mb-2">Slice 2 Reward</label><input type="number" value={config.slice2} onChange={e=>setConfig({...config, slice2: Number(e.target.value)})} className="w-full p-3 border rounded font-black outline-none text-emerald-600"/></div>
-             <div className="bg-slate-50 p-4 border rounded-xl"><label className="text-[10px] font-black uppercase text-slate-400 block mb-2">Slice 3 Reward</label><input type="number" value={config.slice3} onChange={e=>setConfig({...config, slice3: Number(e.target.value)})} className="w-full p-3 border rounded font-black outline-none text-emerald-600"/></div>
-             <div className="bg-slate-50 p-4 border rounded-xl"><label className="text-[10px] font-black uppercase text-slate-400 block mb-2">Slice 4 Reward</label><input type="number" value={config.slice4} onChange={e=>setConfig({...config, slice4: Number(e.target.value)})} className="w-full p-3 border rounded font-black outline-none text-emerald-600"/></div>
-             <div className="bg-slate-50 p-4 border rounded-xl"><label className="text-[10px] font-black uppercase text-slate-400 block mb-2">Slice 5 Reward</label><input type="number" value={config.slice5} onChange={e=>setConfig({...config, slice5: Number(e.target.value)})} className="w-full p-3 border rounded font-black outline-none text-emerald-600"/></div>
-             <div className="bg-slate-50 p-4 border rounded-xl"><label className="text-[10px] font-black uppercase text-slate-400 block mb-2">Slice 6 Reward</label><input type="number" value={config.slice6} onChange={e=>setConfig({...config, slice6: Number(e.target.value)})} className="w-full p-3 border rounded font-black outline-none text-emerald-600"/></div>
-          </div>
-       </div>
+    <SectionHeader title="Lucky Wheel Manager" onRefresh={loadData} loading={loading} />
+    <div className="bg-white p-6 rounded-2xl border shadow-sm">
+      <div className="flex justify-between items-center mb-6 pb-4 border-b">
+         <h2 className="text-xl font-black uppercase tracking-widest text-slate-800">Manually Edit Stats</h2>
+         <button onClick={saveStats} className="bg-emerald-600 text-white px-6 py-3 rounded-lg font-black uppercase text-xs cursor-pointer hover:bg-emerald-700 shadow-md flex items-center gap-2"><CheckCircle2 className="w-4 h-4"/> Override Database</button>
+      </div>
+      <div className="grid md:grid-cols-2 gap-6">
+         {bx("Spins Today", "spinsToday")}
+         {bx("Spins All Time", "spinsAllTime")}
+         {bx("Coins Given Today", "coinsToday")}
+         {bx("Coins Given All Time", "coinsAllTime")}
+      </div>
+      <p className="text-xs font-bold text-slate-400 mt-6 bg-slate-50 p-3 rounded border">Note: Modifying these numbers instantly changes what is displayed on the user panel.</p>
     </div>
   </div>;
 }
@@ -608,11 +599,11 @@ function GamesMgr({ md, u, cache, setCache }) {
     } catch(e) {}
     setLoading(false);
   };
-  useEffect(() => { if (!cache.games || cache.games.length === 0) loadData(); }, []);
-
   const games = cache.games || []; const modes = cache.modes || [];
 
-  return <div><SectionHeader title="Games & Modes" onRefresh={loadData} loading={loading} /><div className="space-y-6"><div className="flex justify-between items-center bg-white p-6 rounded-2xl border shadow-sm"><h2 className="font-black text-xl uppercase">Manage Collection</h2><div className="flex gap-2"><button onClick={()=>md({t:'mode',title:'Add Mode',gl:games,onC:(g,n,b,p)=>{if(g&&n)addDoc(collection(db,'artifacts',appId,'public','data','modes'),{gameId:g,name:n,bannerUrl:b,priority:Number(p||0),createdBy:u.name}).then(loadData)}})} className="bg-indigo-100 text-indigo-700 px-4 py-2 rounded-lg font-black text-xs uppercase cursor-pointer">Add Mode</button><button onClick={()=>md({t:'game',title:'Add Game',onC:(n,b)=>{if(n)addDoc(collection(db,'artifacts',appId,'public','data','games'),{name:n,bannerUrl:b,createdBy:u.name}).then(loadData)}})} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-black text-xs uppercase cursor-pointer">Add Game</button></div></div><div className="grid md:grid-cols-2 gap-6">{games.map(g=><div key={g.id} className="bg-white rounded-2xl border overflow-hidden shadow-sm"><div className="h-32 bg-slate-900 relative">{g.bannerUrl?<img src={g.bannerUrl} className="w-full h-full object-cover opacity-60"/>:<Gamepad2 className="m-auto mt-8 text-white/20 w-12 h-12"/>}<div className="absolute bottom-2 left-4 text-white font-black text-2xl uppercase">{g.name}</div><div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-[8px] font-bold text-white uppercase">By: {g.createdBy||'Admin'}</div>{u.role === 'admin' && <button onClick={()=>{const hasModes = modes.some(m => m.gameId === g.id); if (hasModes) return md({t: 'err', title: 'Cannot Delete', msg: 'Please delete all modes inside this game first.'}); md({t: 'confirm', title: 'Delete Game', msg: `Are you sure you want to delete ${g.name}?`, onC: () => deleteDoc(doc(db,'artifacts',appId,'public','data','games',g.id)).then(loadData)})}} className="absolute top-2 right-2 p-1.5 bg-rose-500 rounded text-white cursor-pointer hover:bg-rose-600 transition-colors"><Trash2 className="w-4 h-4"/></button>}</div><div className="p-4 bg-slate-50 space-y-2">{modes.filter(m=>m.gameId===g.id).sort((a,b)=>(a.priority||0)-(b.priority||0)).map(m=><div key={m.id} className="bg-white p-3 rounded-xl border shadow-sm flex justify-between items-center"><div className="font-bold text-sm uppercase">{m.name} <span className="text-[9px] text-slate-400 block normal-case">By: {m.createdBy||'Admin'} | Priority: {m.priority||0}</span></div><div className="flex gap-2">{u.role === 'admin' && <button onClick={()=>md({t:'mode', title:'Edit Mode', gl:games, d1:m.gameId, d2:m.name, d3:m.bannerUrl, d4:m.priority, onC:(ga,na,ba,pr)=>{updateDoc(doc(db,'artifacts',appId,'public','data','modes',m.id), {gameId:ga, name:na, bannerUrl:ba, priority:Number(pr||0)}).then(loadData)}})} className="text-blue-500 cursor-pointer p-2 hover:bg-blue-50 rounded"><Edit className="w-4 h-4"/></button>}{u.role === 'admin' && <button onClick={()=>md({t: 'confirm', title: 'Delete Mode', msg: `Delete ${m.name}?`, onC: () => deleteDoc(doc(db,'artifacts',appId,'public','data','modes',m.id)).then(loadData)})} className="text-rose-500 cursor-pointer p-2 hover:bg-rose-50 rounded"><Trash2 className="w-4 h-4"/></button>}</div></div>)}</div></div>)}</div></div></div>;
+  return <div><SectionHeader title="Games & Modes" onRefresh={loadData} loading={loading} /><div className="space-y-6"><div className="flex justify-between items-center bg-white p-6 rounded-2xl border shadow-sm"><h2 className="font-black text-xl uppercase">Manage Collection</h2><div className="flex gap-2"><button onClick={()=>md({t:'mode',title:'Add Mode',gl:games,onC:(g,n,b,p)=>{if(g&&n)addDoc(collection(db,'artifacts',appId,'public','data','modes'),{gameId:g,name:n,bannerUrl:b,priority:Number(p||0),createdBy:u.name}).then(loadData)}})} className="bg-indigo-100 text-indigo-700 px-4 py-2 rounded-lg font-black text-xs uppercase cursor-pointer">Add Mode</button><button onClick={()=>md({t:'game',title:'Add Game',onC:(n,b)=>{if(n)addDoc(collection(db,'artifacts',appId,'public','data','games'),{name:n,bannerUrl:b,createdBy:u.name}).then(loadData)}})} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-black text-xs uppercase cursor-pointer">Add Game</button></div></div>
+  {games.length===0 && <div className="p-8 text-center text-slate-400 font-bold bg-white rounded-2xl border">Click Refresh Data to load games.</div>}
+  <div className="grid md:grid-cols-2 gap-6">{games.map(g=><div key={g.id} className="bg-white rounded-2xl border overflow-hidden shadow-sm"><div className="h-32 bg-slate-900 relative">{g.bannerUrl?<img src={g.bannerUrl} className="w-full h-full object-cover opacity-60"/>:<Gamepad2 className="m-auto mt-8 text-white/20 w-12 h-12"/>}<div className="absolute bottom-2 left-4 text-white font-black text-2xl uppercase">{g.name}</div><div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-[8px] font-bold text-white uppercase">By: {g.createdBy||'Admin'}</div>{u.role === 'admin' && <button onClick={()=>{const hasModes = modes.some(m => m.gameId === g.id); if (hasModes) return md({t: 'err', title: 'Cannot Delete', msg: 'Please delete all modes inside this game first.'}); md({t: 'confirm', title: 'Delete Game', msg: `Are you sure you want to delete ${g.name}?`, onC: () => deleteDoc(doc(db,'artifacts',appId,'public','data','games',g.id)).then(loadData)})}} className="absolute top-2 right-2 p-1.5 bg-rose-500 rounded text-white cursor-pointer hover:bg-rose-600 transition-colors"><Trash2 className="w-4 h-4"/></button>}</div><div className="p-4 bg-slate-50 space-y-2">{modes.filter(m=>m.gameId===g.id).sort((a,b)=>(a.priority||0)-(b.priority||0)).map(m=><div key={m.id} className="bg-white p-3 rounded-xl border shadow-sm flex justify-between items-center"><div className="font-bold text-sm uppercase">{m.name} <span className="text-[9px] text-slate-400 block normal-case">By: {m.createdBy||'Admin'} | Priority: {m.priority||0}</span></div><div className="flex gap-2">{u.role === 'admin' && <button onClick={()=>md({t:'mode', title:'Edit Mode', gl:games, d1:m.gameId, d2:m.name, d3:m.bannerUrl, d4:m.priority, onC:(ga,na,ba,pr)=>{updateDoc(doc(db,'artifacts',appId,'public','data','modes',m.id), {gameId:ga, name:na, bannerUrl:ba, priority:Number(pr||0)}).then(loadData)}})} className="text-blue-500 cursor-pointer p-2 hover:bg-blue-50 rounded"><Edit className="w-4 h-4"/></button>}{u.role === 'admin' && <button onClick={()=>md({t: 'confirm', title: 'Delete Mode', msg: `Delete ${m.name}?`, onC: () => deleteDoc(doc(db,'artifacts',appId,'public','data','modes',m.id)).then(loadData)})} className="text-rose-500 cursor-pointer p-2 hover:bg-rose-50 rounded"><Trash2 className="w-4 h-4"/></button>}</div></div>)}</div></div>)}</div></div></div>;
 }
 
 // 🔥 TOURNEY MGR: SORTING BY FILLED CAPACITY + MANUAL REFRESH 🔥
@@ -625,7 +616,6 @@ function TourneyMgr({ md, u, s, cache, setCache }) {
     setLoading(true);
     try {
       const [gSnap, mSnap, tSnap] = await Promise.all([getDocs(baseRef('games')), getDocs(baseRef('modes')), getDocs(query(baseRef('tournaments'), orderBy('dateTime', 'desc'), limit(100)))]);
-      
       const tRaw = tSnap.docs.map(d=>({id:d.id,...d.data()}));
       // Sort logic: Filled capacity first, then by date
       tRaw.sort((a,b) => {
@@ -634,13 +624,10 @@ function TourneyMgr({ md, u, s, cache, setCache }) {
          if (aFilled !== bFilled) return bFilled - aFilled; // 1 before 0
          return new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime();
       });
-
       setCache(p=>({...p, games: gSnap.docs.map(d=>({id:d.id,...d.data()})), modes: mSnap.docs.map(d=>({id:d.id,...d.data()})), tournaments: tRaw }));
     } catch(e) {}
     setLoading(false);
   };
-
-  useEffect(() => { if (!cache.tournaments || cache.tournaments.length === 0) loadData(); }, []);
 
   const games = cache.games || []; const modes = cache.modes || []; const tournaments = cache.tournaments || [];
 
@@ -733,6 +720,7 @@ function TourneyMgr({ md, u, s, cache, setCache }) {
         </div>
       </div>
       <div className="divide-y">
+      {tournaments.length===0 && <div className="p-8 text-center text-slate-400 font-bold">Click Refresh Data to load tournaments.</div>}
       {tournaments.filter(t=>tb==='active'?t.status!=='result'&&t.status!=='cancelled':(t.status==='result'||t.status==='cancelled')).map(t=>{
         if(tb==='history') return <details key={t.id} className="p-5 bg-white group cursor-pointer"><summary className="list-none font-black text-lg uppercase outline-none flex justify-between items-center"><div className="flex items-center gap-3">{t.status==='cancelled'?<XCircle className="text-rose-500 w-5 h-5"/>:<Trophy className="text-emerald-500 w-5 h-5"/>}{t.title} <span className="text-[10px] text-slate-400 bg-slate-100 px-2 py-0.5 rounded">{fDate(t.dateTime)}</span></div><div className="flex gap-4">
           {u.role === 'admin' && <button onClick={(e)=>{e.preventDefault(); md({t:'confirm',title:'Delete Match',msg:'Delete completely from history?',onC:async ()=>{ try { await deleteDoc(doc(db,'artifacts',appId,'public','data','tournaments',t.id)); md({t:'alert',title:'Success',msg:'Updated successfully'}); loadData(); } catch(err){ md({t:'err',title:'Error',msg:err.message}); } }})}} className="text-rose-500 bg-rose-50 p-2 rounded cursor-pointer hover:bg-rose-500 hover:text-white"><Trash2 className="w-4 h-4"/></button>}
@@ -780,12 +768,10 @@ function DeviceBanMgr({ md, u: adminUser, cache, setCache }) {
     try { const snap = await getDocs(query(baseRef('bannedDevices'), limit(50))); setCache(p=>({...p, bannedDevices: snap.docs.map(d=>({id:d.id, ...d.data()})) })); } catch(e) {}
     setLoading(false);
   };
-  useEffect(() => { if (!cache.bannedDevices || cache.bannedDevices.length === 0) loadData(); }, []);
-
   const bannedDevices = cache.bannedDevices || [];
 
   return <div><SectionHeader title="Banned Devices" onRefresh={loadData} loading={loading} /><div className="bg-white p-6 rounded-2xl border shadow-sm"><h2 className="text-xl font-black uppercase mb-6 flex justify-between items-center">Hardware Bans</h2><div className="space-y-3">
-  {bannedDevices.length === 0 && <div className="text-slate-500 font-bold p-6 bg-slate-50 text-center rounded-xl">No banned devices found.</div>}
+  {bannedDevices.length === 0 && <div className="text-slate-500 font-bold p-6 bg-slate-50 text-center rounded-xl">Click Refresh Data to load bans.</div>}
   {bannedDevices.map(b => (
     <div key={b.id} className="p-4 border rounded-xl flex justify-between items-center shadow-sm">
       <div><div className="font-black">{b.deviceId}</div><div className="text-xs text-slate-400">{fDate(b.bannedAt)}</div></div>
@@ -801,8 +787,6 @@ function MessageMgr({ md, u: adminUser, cache, setCache }) {
     try { const snap = await getDocs(query(baseRef('messages'), orderBy('createdAt', 'desc'), limit(50))); setCache(p=>({...p, messages: snap.docs.map(d=>({id:d.id, ...d.data()})) })); } catch(e) {}
     setLoading(false);
   };
-  useEffect(() => { if (!cache.messages || cache.messages.length === 0) loadData(); }, []);
-
   const messages = cache.messages || [];
 
   return <div><SectionHeader title="Messages & Notifications" onRefresh={loadData} loading={loading} /><div className="space-y-6"><div className="flex justify-between items-center bg-white p-6 rounded-2xl border shadow-sm"><h2 className="text-xl font-black uppercase">Message Broadcasts</h2><div className="flex gap-2">
@@ -812,7 +796,7 @@ function MessageMgr({ md, u: adminUser, cache, setCache }) {
       try { await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'messages'), { title, body, createdAt: new Date().toISOString(), readBy: [], targetUids: targetType === 'specific' ? targetUids : ['all'] }); await sendPushNotification({ title, body, targetUids: targetType === 'specific' ? targetUids : ['all'] }); md({t:'alert', title:'Success', msg:'Message pushed successfully'}); loadData(); } catch(e) { md({t:'err', title:'Notification Error', msg:e.message}); }
     }})} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-black text-xs uppercase cursor-pointer hover:bg-blue-700"><Plus className="w-4 h-4 inline"/> Create</button>
   </div></div><div className="bg-white rounded-2xl border overflow-hidden shadow-sm"><div className="divide-y">
-    {messages.length === 0 && <div className="p-8 text-center text-slate-500 font-bold">No messages found.</div>}
+    {messages.length === 0 && <div className="p-8 text-center text-slate-500 font-bold">Click Refresh Data to load messages.</div>}
     {messages.map(m => (
       <div key={m.id} className="p-5 hover:bg-slate-50 transition-colors flex justify-between items-start gap-4"><div className="flex-1"><div className="font-black text-lg text-slate-800 uppercase">{m.title} {m.targetUids && m.targetUids[0] !== 'all' && <span className="bg-amber-100 text-amber-700 text-[9px] px-2 py-0.5 rounded ml-2 align-middle">PRIVATE MESSAGE</span>}</div><div className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1 mb-2">{fDate(m.createdAt)}</div><div className="text-sm font-medium text-slate-600 whitespace-pre-wrap">{m.body}</div><div className="text-[10px] text-blue-500 font-bold uppercase mt-3 tracking-widest">Read by: {(m.readBy || []).length} users</div></div><div className="flex gap-2 shrink-0">
         <button onClick={() => md({t:'message', title:'Edit Message', d1: m.title, d2: m.body, onC: async (title, body) => {
@@ -834,7 +818,6 @@ function StaffMgr({ md, u, cache, setCache }) {
     try { const snap = await getDocs(query(baseRef('users'), where('role', '==', 'staff'))); setCache(p=>({...p, staff: snap.docs.map(d=>({id:d.id, ...d.data()})) })); } catch(e) {}
     setLoading(false);
   };
-  useEffect(() => { if (!cache.staff || cache.staff.length === 0) loadData(); }, []);
 
   if (u.role!=='admin') return <div className="p-8 text-center text-rose-500 font-bold bg-white rounded-xl">Super Admins Only.</div>;
   const sList = cache.staff || [];
@@ -846,7 +829,7 @@ function StaffMgr({ md, u, cache, setCache }) {
       if(uu.role==='admin') return md({t:'err',title:'Error',msg:'Cannot modify Super Admin.'}); 
       await updateDoc(doc(db,'artifacts',appId,'public','data','users',uu.id),{role:'staff',permissions:p}); loadData();
     } else md({t:'err',title:'Error',msg:'User not found.'});
-  }})} className="bg-blue-600 text-white px-5 py-2.5 rounded-lg font-black text-xs uppercase cursor-pointer hover:bg-blue-700"><Plus className="w-4 h-4 inline"/> Add Staff</button></div><div className="space-y-3">{sList.length===0&&<div className="p-6 text-center text-slate-400 font-bold bg-slate-50 rounded-xl">No staff.</div>}{sList.map(s=><div key={s.uid} className="p-5 border rounded-xl flex justify-between items-center bg-white shadow-sm"><div><div className="font-black text-2xl uppercase">{s.name}</div><div className="text-sm font-bold text-slate-500 mb-2">{s.email}</div><div className="flex gap-1">{s.permissions.map(p=><span key={p} className="text-[9px] bg-slate-100 text-slate-600 px-2 py-1 rounded border uppercase font-bold">{p}</span>)}</div></div><div className="flex gap-2"><button onClick={()=>{const po={dashboard:0,users:0,games:0,tournaments:0,finance:0,staff:0,settings:0,luckywheel:0}; s.permissions.forEach(x=>po[x]=1); md({t:'staff',title:'Edit Staff',ed:true,d1:s.email,dp:po,onC:(e,p)=>{updateDoc(doc(db,'artifacts',appId,'public','data','users',s.id),{permissions:p}).then(loadData)}});}} className="px-4 py-2 bg-slate-100 font-black text-xs uppercase rounded cursor-pointer hover:bg-blue-100 hover:text-blue-600"><Edit className="w-4 h-4"/></button><button onClick={()=>md({t:'confirm',title:'Remove Staff',msg:'Demote to regular user?',onC:()=>{updateDoc(doc(db,'artifacts',appId,'public','data','users',s.id),{role:'user',permissions:[]}).then(loadData)}})} className="px-4 py-2 bg-rose-50 text-rose-600 font-black text-xs uppercase rounded border border-rose-100 cursor-pointer hover:bg-rose-500 hover:text-white"><Trash2 className="w-4 h-4"/></button></div></div>)}</div></div></div>;
+  }})} className="bg-blue-600 text-white px-5 py-2.5 rounded-lg font-black text-xs uppercase cursor-pointer hover:bg-blue-700"><Plus className="w-4 h-4 inline"/> Add Staff</button></div><div className="space-y-3">{sList.length===0&&<div className="p-6 text-center text-slate-400 font-bold bg-slate-50 rounded-xl">Click Refresh Data to load staff.</div>}{sList.map(s=><div key={s.uid} className="p-5 border rounded-xl flex justify-between items-center bg-white shadow-sm"><div><div className="font-black text-2xl uppercase">{s.name}</div><div className="text-sm font-bold text-slate-500 mb-2">{s.email}</div><div className="flex gap-1">{s.permissions.map(p=><span key={p} className="text-[9px] bg-slate-100 text-slate-600 px-2 py-1 rounded border uppercase font-bold">{p}</span>)}</div></div><div className="flex gap-2"><button onClick={()=>{const po={dashboard:0,users:0,games:0,tournaments:0,finance:0,staff:0,settings:0,luckywheel:0}; s.permissions.forEach(x=>po[x]=1); md({t:'staff',title:'Edit Staff',ed:true,d1:s.email,dp:po,onC:(e,p)=>{updateDoc(doc(db,'artifacts',appId,'public','data','users',s.id),{permissions:p}).then(loadData)}});}} className="px-4 py-2 bg-slate-100 font-black text-xs uppercase rounded cursor-pointer hover:bg-blue-100 hover:text-blue-600"><Edit className="w-4 h-4"/></button><button onClick={()=>md({t:'confirm',title:'Remove Staff',msg:'Demote to regular user?',onC:()=>{updateDoc(doc(db,'artifacts',appId,'public','data','users',s.id),{role:'user',permissions:[]}).then(loadData)}})} className="px-4 py-2 bg-rose-50 text-rose-600 font-black text-xs uppercase rounded border border-rose-100 cursor-pointer hover:bg-rose-500 hover:text-white"><Trash2 className="w-4 h-4"/></button></div></div>)}</div></div></div>;
 }
 
 function SetMgr({ s, md, u: adminUser }) {
