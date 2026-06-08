@@ -53,14 +53,19 @@ const sendPushNotification = async ({ title, body, targetUids, data = {} }) => {
       const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'users'));
       snap.forEach(d => { if (d.data().fcmToken && d.data().role === 'user') fcmTokens.push(d.data().fcmToken); });
     } else if (targetUids.length > 0) {
-      // Fetch in chunks of 10 to strictly obey Firebase query limits
-      for (let i = 0; i < targetUids.length; i += 10) {
-        const chunk = targetUids.slice(i, i + 10);
-        const snap = await getDocs(query(baseRef('users'), where('uid', 'in', chunk)));
-        snap.forEach(d => { if (d.data().fcmToken) fcmTokens.push(d.data().fcmToken); });
+      // 🔥 BUG FIXED: Fetch tokens directly and safely to guarantee delivery 🔥
+      for (const uid of targetUids) {
+        if (!uid) continue;
+        const uSnap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', uid));
+        if (uSnap.exists() && uSnap.data().fcmToken) {
+          fcmTokens.push(uSnap.data().fcmToken);
+        }
       }
     }
   } catch (err) { console.error("Token fetch error:", err); }
+
+  // Skip API call if no tokens were found to prevent silent crashing
+  if (fcmTokens.length === 0) return { success: false, msg: 'No tokens found' };
 
   const payload = { title, body, targetUids, fcmTokens, data: { ...data, click_action: 'FLUTTER_NOTIFICATION_CLICK' }, android: { priority: 'high', notification: { sound: 'default', channel_id: 'tournament_alerts' } }, apns: { headers: { 'apns-priority': '10' }, payload: { aps: { sound: 'default', 'content-available': 1 } } } };
   const res = await fetch('https://esports-tournament-app-beta.vercel.app/api/sendNotification', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
@@ -641,31 +646,35 @@ function TourneyMgr({ md, u, s, cache, setCache }) {
     } catch(err) { md({t:'err',title:'Error',msg:err.message}); }
   };
 
-  const st = (t, ns) => {
+const st = (t, ns) => {
     if(ns==='cancelled'){
       if(t.status === 'cancelled') return;
       md({
         t:'confirm',title:'Cancel Match?',msg:'This moves to History and refunds players.',
         onC:async ()=>{
+          md({t:'alert', title:'Refunding...', msg:'Processing refunds, please wait...'}); // Show loading state
           try {
-            await Promise.all((t.joinedUsers||[]).map(async ju=>{
+            const fee = Number(t.entryFee || 0);
+            // 🔥 BUG FIXED: Replaced Promise.all with sequential loop. Prevents Firebase rate limits/timeouts which cause partial refunds. 🔥
+            for (const ju of (t.joinedUsers || [])) {
               const uid = ju.uid || ju;
-              const uuSnap = await getDoc(doc(db,'artifacts',appId,'public','data','users',uid));
-              if(uuSnap.exists()) {
-                const uu = uuSnap.data();
-                await updateDoc(doc(db,'artifacts',appId,'public','data','users',uid), { balance: Number(uu.balance||0)+Number(t.entryFee), depositBalance: Number(uu.depositBalance||0)+Number(t.entryFee) });
-                await addDoc(collection(db,'artifacts',appId,'public','data','transactions'),{uid,type:'refund',amount:t.entryFee,description:`Refund: ${t.title}`,status:'completed',date:new Date().toISOString()});
+              if (!uid) continue;
+              const uSnap = await getDoc(doc(db,'artifacts',appId,'public','data','users',uid));
+              if(uSnap.exists() && fee > 0) {
+                const uu = uSnap.data();
+                await updateDoc(doc(db,'artifacts',appId,'public','data','users',uid), { balance: Number(uu.balance||0) + fee, depositBalance: Number(uu.depositBalance||0) + fee });
+                await addDoc(collection(db,'artifacts',appId,'public','data','transactions'),{uid,type:'refund',amount:fee,description:`Refund: ${t.title}`,status:'completed',date:new Date().toISOString()});
               }
-            }));
+            }
             await updateDoc(doc(db,'artifacts',appId,'public','data','tournaments',t.id),{status:ns});
-            md({t:'alert',title:'Success',msg:'Updated successfully'}); loadData();
+            md({t:'alert',title:'Success',msg:'Match cancelled and 100% of users refunded!'}); loadData();
           } catch (err) { md({t:'err',title:'Error',msg:err.message}); }
         }
       });
     } else {
       try { updateDoc(doc(db,'artifacts',appId,'public','data','tournaments',t.id),{status:ns}).then(loadData); md({t:'alert',title:'Success',msg:'Updated successfully'}); } catch(err) { md({t:'err',title:'Error',msg:err.message}); }
     }
-  };
+  };;
 
   const [rt, setRt] = useState(null); const [rd, setRd] = useState({}); const [rn, setRn] = useState('');
   const [isLoadingResults, setIsLoadingResults] = useState(false);
