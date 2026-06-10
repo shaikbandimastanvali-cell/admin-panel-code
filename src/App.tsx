@@ -623,28 +623,35 @@ function GamesMgr({ md, u, cache, setCache }) {
   <div className="grid md:grid-cols-2 gap-6">{games.map(g=><div key={g.id} className="bg-white rounded-2xl border overflow-hidden shadow-sm"><div className="h-32 bg-slate-900 relative">{g.bannerUrl?<img src={g.bannerUrl} className="w-full h-full object-cover opacity-60"/>:<Gamepad2 className="m-auto mt-8 text-white/20 w-12 h-12"/>}<div className="absolute bottom-2 left-4 text-white font-black text-2xl uppercase">{g.name}</div><div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-[8px] font-bold text-white uppercase">By: {g.createdBy||'Admin'}</div>{u.role === 'admin' && <button onClick={()=>{const hasModes = modes.some(m => m.gameId === g.id); if (hasModes) return md({t: 'err', title: 'Cannot Delete', msg: 'Please delete all modes inside this game first.'}); md({t: 'confirm', title: 'Delete Game', msg: `Are you sure you want to delete ${g.name}?`, onC: () => deleteDoc(doc(db,'artifacts',appId,'public','data','games',g.id)).then(loadData)})}} className="absolute top-2 right-2 p-1.5 bg-rose-500 rounded text-white cursor-pointer hover:bg-rose-600 transition-colors"><Trash2 className="w-4 h-4"/></button>}</div><div className="p-4 bg-slate-50 space-y-2">{modes.filter(m=>m.gameId===g.id).sort((a,b)=>(a.priority||0)-(b.priority||0)).map(m=><div key={m.id} className="bg-white p-3 rounded-xl border shadow-sm flex justify-between items-center"><div className="font-bold text-sm uppercase">{m.name} <span className="text-[9px] text-slate-400 block normal-case">By: {m.createdBy||'Admin'} | Priority: {m.priority||0}</span></div><div className="flex gap-2">{u.role === 'admin' && <button onClick={()=>md({t:'mode', title:'Edit Mode', gl:games, d1:m.gameId, d2:m.name, d3:m.bannerUrl, d4:m.priority, onC:(ga,na,ba,pr)=>{updateDoc(doc(db,'artifacts',appId,'public','data','modes',m.id), {gameId:ga, name:na, bannerUrl:ba, priority:Number(pr||0)}).then(loadData)}})} className="text-blue-500 cursor-pointer p-2 hover:bg-blue-50 rounded"><Edit className="w-4 h-4"/></button>}{u.role === 'admin' && <button onClick={()=>md({t: 'confirm', title: 'Delete Mode', msg: `Delete ${m.name}?`, onC: () => deleteDoc(doc(db,'artifacts',appId,'public','data','modes',m.id)).then(loadData)})} className="text-rose-500 cursor-pointer p-2 hover:bg-rose-50 rounded"><Trash2 className="w-4 h-4"/></button>}</div></div>)}</div></div>)}</div></div></div>;
 }
 
-// 🔥 TOURNEY MGR: SORTING BY FILLED CAPACITY + MANUAL REFRESH 🔥
+// 🔥 TOURNEY MGR: HIERARCHICAL ACCORDION (GAME -> MODE -> MATCHES) 🔥
 function TourneyMgr({ md, u, s, cache, setCache }) {
   const [loading, setLoading] = useState(false);
   const [fo, setFo] = useState(false); const [fd, setFd] = useState({gameId:'',modeId:'',title:'',bannerUrl:'',customText:'',dateTime:'',type:'solo',perKill:0,entryFee:0,totalSlots:48,status:'upcoming'}); const [tb, setTb] = useState('active');
   const [isPublishing, setIsPublishing] = useState(false); const [editId, setEditId] = useState(null);
+  
+  // State to manage the open/closed status of the Game and Mode accordions
+  const [expG, setExpG] = useState(null); 
+  const [expM, setExpM] = useState(null);
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const [gSnap, mSnap, tSnap] = await Promise.all([getDocs(baseRef('games')), getDocs(baseRef('modes')), getDocs(query(baseRef('tournaments'), orderBy('dateTime', 'desc'), limit(100)))]);
+      // Increased limit to 500 to easily handle 160+ matches without hiding any
+      const [gSnap, mSnap, tSnap] = await Promise.all([getDocs(baseRef('games')), getDocs(baseRef('modes')), getDocs(query(baseRef('tournaments'), orderBy('dateTime', 'desc'), limit(500)))]);
       const tRaw = tSnap.docs.map(d=>({id:d.id,...d.data()}));
-      // Sort logic: Filled capacity first, then by date
+      
       tRaw.sort((a,b) => {
          const aFilled = (a.joinedUsers?.length || 0) >= (a.totalSlots || 0) ? 1 : 0;
          const bFilled = (b.joinedUsers?.length || 0) >= (b.totalSlots || 0) ? 1 : 0;
-         if (aFilled !== bFilled) return bFilled - aFilled; // 1 before 0
+         if (aFilled !== bFilled) return bFilled - aFilled; 
          return new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime();
       });
       setCache(p=>({...p, games: gSnap.docs.map(d=>({id:d.id,...d.data()})), modes: mSnap.docs.map(d=>({id:d.id,...d.data()})), tournaments: tRaw }));
     } catch(e) {}
     setLoading(false);
   };
+
+  useEffect(() => { if (!cache.tournaments || cache.tournaments.length === 0) loadData(); }, []);
 
   const games = cache.games || []; const modes = cache.modes || []; const tournaments = cache.tournaments || [];
 
@@ -658,16 +665,15 @@ function TourneyMgr({ md, u, s, cache, setCache }) {
     } catch(err) { md({t:'err',title:'Error',msg:err.message}); }
   };
 
-const st = (t, ns) => {
+  const st = (t, ns) => {
     if(ns==='cancelled'){
       if(t.status === 'cancelled') return;
       md({
         t:'confirm',title:'Cancel Match?',msg:'This moves to History and refunds players.',
         onC:async ()=>{
-          md({t:'alert', title:'Refunding...', msg:'Processing refunds, please wait...'}); // Show loading state
+          md({t:'alert', title:'Refunding...', msg:'Processing refunds, please wait...'});
           try {
             const fee = Number(t.entryFee || 0);
-            // 🔥 BUG FIXED: Replaced Promise.all with sequential loop. Prevents Firebase rate limits/timeouts which cause partial refunds. 🔥
             for (const ju of (t.joinedUsers || [])) {
               const uid = ju.uid || ju;
               if (!uid) continue;
@@ -686,7 +692,7 @@ const st = (t, ns) => {
     } else {
       try { updateDoc(doc(db,'artifacts',appId,'public','data','tournaments',t.id),{status:ns}).then(loadData); md({t:'alert',title:'Success',msg:'Updated successfully'}); } catch(err) { md({t:'err',title:'Error',msg:err.message}); }
     }
-  };;
+  };
 
   const [rt, setRt] = useState(null); const [rd, setRd] = useState({}); const [rn, setRn] = useState('');
   const [isLoadingResults, setIsLoadingResults] = useState(false);
@@ -731,55 +737,107 @@ const st = (t, ns) => {
 
   if(rt) return <div className="bg-white p-6 rounded-2xl border"><div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-black uppercase">Results: {rt.title}</h2><div className="flex gap-2"><button disabled={isPublishing} onClick={()=>setRt(null)} className="px-4 py-2 bg-slate-100 font-bold rounded-lg cursor-pointer disabled:opacity-50">Cancel</button><button disabled={isPublishing} onClick={sR} className="px-4 py-2 bg-emerald-600 text-white font-black rounded-lg uppercase cursor-pointer disabled:opacity-50">{isPublishing ? 'Publishing...' : 'Publish'}</button></div></div><textarea value={rn} onChange={e=>setRn(e.target.value)} placeholder="Custom instructions/notes for this match..." className="w-full p-3 border rounded-lg mb-4 outline-none font-bold"/><table className="w-full text-sm text-left"><thead className="bg-slate-100 text-[10px] uppercase font-black"><tr><th className="p-3">Player</th><th className="p-3 text-center">Kills</th><th className="p-3 text-right">Earned</th></tr></thead><tbody>{Object.values(rd).map(r=><tr key={r.uid}><td className="p-3 font-bold uppercase">{r.gameName}</td><td className="p-3 text-center"><input type="number" min="0" value={r.kills} onChange={e=>setRd({...rd,[r.uid]:{...r,kills:Number(e.target.value)}})} className="w-20 p-2 border rounded font-black text-center outline-none"/></td><td className="p-3 text-right"><input type="number" min="0" value={r.earned} onChange={e=>setRd({...rd,[r.uid]:{...r,earned:Number(e.target.value)}})} className="w-24 p-2 border border-emerald-300 bg-emerald-50 text-emerald-700 rounded font-black text-right outline-none"/></td></tr>)}</tbody></table></div>;
 
-  return <div><SectionHeader title="Tournaments" onRefresh={loadData} loading={loading} /><div className="space-y-6"><div className="flex justify-between items-center bg-white p-6 rounded-2xl border shadow-sm"><h2 className="text-xl font-black uppercase">Manage Tournaments</h2><button onClick={()=>{setFd({gameId:'',modeId:'',title:'',bannerUrl:'',customText:'',dateTime:'',type:'solo',perKill:0,entryFee:0,totalSlots:48,status:'upcoming'}); setEditId(null); setFo(!fo);}} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-black text-xs uppercase cursor-pointer"><Plus className="w-4 h-4 inline"/> Create</button></div>
+  // Filter and Group Logic
+  const filteredT = tournaments.filter(t=>tb==='active'?t.status!=='result'&&t.status!=='cancelled':(t.status==='result'||t.status==='cancelled'));
+  const groupedByGame = {};
+  filteredT.forEach(t => {
+     if(!groupedByGame[t.gameId]) groupedByGame[t.gameId] = {};
+     if(!groupedByGame[t.gameId][t.modeId]) groupedByGame[t.gameId][t.modeId] = [];
+     groupedByGame[t.gameId][t.modeId].push(t);
+  });
+
+  return <div><SectionHeader title="Tournaments" onRefresh={loadData} loading={loading} /><div className="space-y-6"><div className="flex justify-between items-center bg-white p-6 rounded-2xl border shadow-sm"><h2 className="text-xl font-black uppercase">Manage Tournaments</h2><button onClick={()=>{setFd({gameId:'',modeId:'',title:'',bannerUrl:'',customText:'',dateTime:'',type:'solo',perKill:0,entryFee:0,totalSlots:48,status:'upcoming'}); setEditId(null); setFo(!fo);}} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-black text-xs uppercase cursor-pointer hover:bg-blue-700"><Plus className="w-4 h-4 inline"/> Create</button></div>
     {fo&&<form onSubmit={sv} className="bg-white p-6 rounded-2xl border-2 border-blue-200 grid md:grid-cols-2 gap-4 shadow-sm"><select required value={fd.gameId} onChange={e=>setFd({...fd,gameId:e.target.value,modeId:''})} className="p-3 border rounded-xl font-bold outline-none cursor-pointer"><option value="">Game...</option>{games.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}</select><select required disabled={!fd.gameId} value={fd.modeId} onChange={e=>setFd({...fd,modeId:e.target.value})} className="p-3 border rounded-xl font-bold outline-none cursor-pointer"><option value="">Mode...</option>{modes.filter(m=>m.gameId===fd.gameId).map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select><input required type="text" placeholder="Title" value={fd.title} onChange={e=>setFd({...fd,title:e.target.value})} className="p-3 border rounded-xl font-bold"/><input type="datetime-local" required value={fd.dateTime} onChange={e=>setFd({...fd,dateTime:e.target.value})} className="p-3 border rounded-xl font-bold"/><div className="flex gap-2 col-span-full"><input required type="number" placeholder="Fee" value={fd.entryFee} onChange={e=>setFd({...fd,entryFee:Number(e.target.value)})} className="flex-1 p-3 border rounded-xl font-black text-blue-600"/><input required type="number" placeholder="Per Kill" value={fd.perKill} onChange={e=>setFd({...fd,perKill:Number(e.target.value)})} className="flex-1 p-3 border rounded-xl font-black text-emerald-600"/><input required type="number" placeholder="Slots" value={fd.totalSlots} onChange={e=>setFd({...fd,totalSlots:Number(e.target.value)})} className="flex-1 p-3 border rounded-xl font-black"/></div><input type="text" placeholder="Banner URL" value={fd.bannerUrl} onChange={e=>setFd({...fd,bannerUrl:e.target.value})} className="col-span-full p-3 border rounded-xl font-bold"/><textarea value={fd.customText} onChange={e=>setFd({...fd,customText:e.target.value})} placeholder="Custom Instructions/Rules" className="col-span-full p-3 border rounded-xl font-bold outline-none h-24"/><button className="col-span-full py-4 bg-blue-600 text-white font-black rounded-xl uppercase cursor-pointer hover:bg-blue-700">{editId ? 'UPDATE MATCH' : 'SAVE MATCH'}</button></form>}
+    
     <div className="bg-white rounded-2xl border overflow-hidden shadow-sm">
       <div className="flex bg-slate-50 border-b justify-between items-center pr-4">
         <div className="flex flex-1">
-          <button onClick={()=>setTb('active')} className={`flex-1 py-4 font-black uppercase text-xs cursor-pointer ${tb==='active'?'text-blue-600 border-b-2 border-blue-600':'text-slate-500'}`}>Active</button>
-          <button onClick={()=>setTb('history')} className={`flex-1 py-4 font-black uppercase text-xs cursor-pointer ${tb==='history'?'text-emerald-600 border-b-2 border-emerald-600':'text-slate-500'}`}>History</button>
+          <button onClick={()=>{setTb('active'); setExpG(null); setExpM(null);}} className={`flex-1 py-4 font-black uppercase text-xs cursor-pointer ${tb==='active'?'text-blue-600 border-b-2 border-blue-600':'text-slate-500'}`}>Active</button>
+          <button onClick={()=>{setTb('history'); setExpG(null); setExpM(null);}} className={`flex-1 py-4 font-black uppercase text-xs cursor-pointer ${tb==='history'?'text-emerald-600 border-b-2 border-emerald-600':'text-slate-500'}`}>History</button>
         </div>
       </div>
-      <div className="divide-y">
-      {tournaments.length===0 && <div className="p-8 text-center text-slate-400 font-bold">Click Refresh Data to load tournaments.</div>}
-      {tournaments.filter(t=>tb==='active'?t.status!=='result'&&t.status!=='cancelled':(t.status==='result'||t.status==='cancelled')).map(t=>{
-        if(tb==='history') return <details key={t.id} className="p-5 bg-white group cursor-pointer"><summary className="list-none font-black text-lg uppercase outline-none flex justify-between items-center"><div className="flex items-center gap-3">{t.status==='cancelled'?<XCircle className="text-rose-500 w-5 h-5"/>:<Trophy className="text-emerald-500 w-5 h-5"/>}{t.title} <span className="text-[10px] text-slate-400 bg-slate-100 px-2 py-0.5 rounded">{fDate(t.dateTime)}</span></div><div className="flex gap-4">
-          {u.role === 'admin' && <button onClick={(e)=>{e.preventDefault(); md({t:'confirm',title:'Delete Match',msg:'Delete completely from history?',onC:async ()=>{ try { await deleteDoc(doc(db,'artifacts',appId,'public','data','tournaments',t.id)); md({t:'alert',title:'Success',msg:'Updated successfully'}); loadData(); } catch(err){ md({t:'err',title:'Error',msg:err.message}); } }})}} className="text-rose-500 bg-rose-50 p-2 rounded cursor-pointer hover:bg-rose-500 hover:text-white"><Trash2 className="w-4 h-4"/></button>}
-          <ChevronRight className="w-5 h-5 text-slate-400 group-open:rotate-90 m-auto"/></div></summary><div className="pt-4 mt-4 border-t space-y-4 cursor-default"><div className="flex gap-4"><div className="bg-slate-50 p-3 rounded border flex-1"><div className="text-[10px] font-black text-slate-400 uppercase">Room ID</div><div className="font-mono font-bold text-lg">{t.roomId||'N/A'}</div></div><div className="bg-slate-50 p-3 rounded border flex-1"><div className="text-[10px] font-black text-slate-400 uppercase">Pass</div><div className="font-mono font-bold text-lg">{t.password||'N/A'}</div></div></div><div className="bg-blue-50 p-3 rounded border border-blue-100 text-sm font-bold">{t.customText||'No custom text.'}</div>{t.status==='result'&&<div className="border rounded-xl overflow-hidden"><table className="w-full text-sm text-left"><thead className="bg-slate-100 text-[10px] uppercase font-black"><tr><th className="p-3">Player</th><th className="p-3">Kills</th><th className="p-3">Earned</th></tr></thead><tbody>{(t.results||[]).map(r=><tr key={r.uid}><td className="p-3 font-bold uppercase">{r.gameName}</td><td className="p-3 font-bold">{r.kills}</td><td className="p-3 font-black text-emerald-600">{r.earned}</td></tr>)}</tbody></table></div>}</div></details>;
-        return <div key={t.id} className={`p-5 flex flex-col md:flex-row justify-between items-center gap-4 ${(t.joinedUsers?.length||0)>=(t.totalSlots||0)?'bg-emerald-50/30':''}`}><div className="flex items-center gap-4"><div className="w-20 h-20 bg-slate-900 rounded-xl relative overflow-hidden">{t.bannerUrl?<img src={t.bannerUrl} className="w-full h-full object-cover opacity-80"/>:<Trophy className="m-auto mt-6 text-white/30"/>}{t.createdBy&&<span className="absolute bottom-1 left-1 bg-black/66 text-white text-[8px] px-1 rounded uppercase font-bold">By: {t.createdBy}</span>}</div><div><div className="font-black text-xl uppercase mb-1">{t.title} <span className="text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-500">{t.status}</span></div><div className="text-[10px] font-bold text-slate-500 uppercase">{fDate(t.dateTime)} | Fee: {t.entryFee} | PK: {t.perKill} | Joined: {(t.joinedUsers||[]).length}/{t.totalSlots} {(t.joinedUsers?.length||0)>=(t.totalSlots||0) && <span className="text-emerald-600 bg-emerald-100 px-1 rounded ml-1">FULL</span>}</div></div></div>
-        <div className="flex gap-2 flex-wrap bg-slate-50 p-2 rounded-xl border">
-          {t.status==='upcoming'&&<>
-            {u.role === 'admin' && <button onClick={() => { setFd({gameId: t.gameId, modeId: t.modeId, title: t.title, bannerUrl: t.bannerUrl || '', customText: t.customText || '', dateTime: t.dateTime, type: t.type || 'solo', perKill: t.perKill, entryFee: t.entryFee, totalSlots: t.totalSlots, status: t.status }); setEditId(t.id); setFo(true); window.scrollTo(0,0); }} className="px-4 py-2 bg-blue-100 text-blue-700 border border-blue-200 font-black text-[10px] uppercase rounded-lg cursor-pointer">EDIT</button>}
-            <button onClick={()=>md({t:'room',title:'Set Room & Start',onC: async (r,p)=>{
-              if(!r || !p){ alert('Room ID and Password required!'); return; }
-              try {
-                await updateDoc(doc(db,'artifacts',appId,'public','data','tournaments',t.id),{roomId:r,password:p,status:'ongoing'});
-                const targetUids = (t.joinedUsers||[]).map(ju => ju.uid || ju);
-                if (targetUids.length > 0) {
-                  await sendPushNotification({ title: `🎮 ${t.title} — Room is LIVE!`, body: `Room ID: ${r}\nPassword: ${p}`, targetUids, data: { type: 'room_live', roomId: String(r), password: String(p), matchTitle: String(t.title), matchId: String(t.id) } });
-                }
-                md({t:'alert',title:'Success',msg:'Room updated & push notification sent!'}); loadData();
-              } catch(err) { md({t:'err',title:'Error',msg:err.message}); }
-            }})} className="px-4 py-2 bg-amber-500 text-white font-black text-[10px] uppercase rounded-lg cursor-pointer">START</button>
-          </>}
-          {t.status==='ongoing'&&<>
-             {u.role === 'admin' && <button onClick={() => { setFd({gameId: t.gameId, modeId: t.modeId, title: t.title, bannerUrl: t.bannerUrl || '', customText: t.customText || '', dateTime: t.dateTime, type: t.type || 'solo', perKill: t.perKill, entryFee: t.entryFee, totalSlots: t.totalSlots, status: t.status }); setEditId(t.id); setFo(true); window.scrollTo(0,0); }} className="px-4 py-2 bg-blue-100 text-blue-700 border border-blue-200 font-black text-[10px] uppercase rounded-lg cursor-pointer">EDIT</button>}
-             <button disabled={isLoadingResults} onClick={()=>oR(t)} className="px-4 py-2 bg-emerald-600 text-white font-black text-[10px] uppercase rounded-lg cursor-pointer disabled:opacity-50">{isLoadingResults ? 'LOADING...' : 'RESULTS'}</button>
-          </>}
-          {(t.status==='upcoming'||t.status==='ongoing')&&<button onClick={()=>st(t,'cancelled')} className="px-4 py-2 bg-white text-rose-500 border font-black text-[10px] uppercase rounded-lg cursor-pointer hover:bg-rose-50">CANCEL</button>}
-        </div>
-        <div className="w-full mt-4 bg-slate-50 p-3 rounded-lg border text-xs">
-          <div className="font-black text-slate-400 uppercase mb-2">Joined Players ({(t.joinedUsers||[]).length})</div>
-          <div className="max-h-32 overflow-y-auto space-y-1">
-            {(t.joinedUsers||[]).map((ju, i) => {
-              const uid = ju.uid || ju; const joinedAt = ju.joinedAt;
-              return <div key={i} className="flex justify-between items-center bg-white p-2 border rounded"><div className="font-bold uppercase flex items-center gap-2">UID: {uid}</div>{joinedAt && <div className="text-[9px] text-slate-400 font-bold uppercase">{fDate(joinedAt)}</div>}</div>;
-            })}
-          </div>
-        </div>
-        </div>;
-      })}
-    </div></div></div></div>;
+      
+      <div className="p-4 space-y-4 bg-slate-100/50">
+        {filteredT.length === 0 && <div className="p-8 text-center text-slate-400 font-bold">No {tb} matches found. Click Refresh Data.</div>}
+        
+        {Object.keys(groupedByGame).map(gId => {
+           const gameName = games.find(g=>g.id===gId)?.name || 'Unknown Game';
+           const isGExp = expG === gId;
+           
+           return (
+             <div key={gId} className="bg-white border rounded-2xl overflow-hidden shadow-sm">
+               <div className="p-4 bg-slate-900 text-white font-black uppercase flex justify-between items-center cursor-pointer hover:bg-slate-800 transition-colors" onClick={()=>{setExpG(isGExp ? null : gId); setExpM(null);}}>
+                 <div className="flex items-center gap-3"><Gamepad2 className="w-5 h-5 text-blue-500"/> {gameName}</div>
+                 <ChevronRight className={`w-5 h-5 transition-transform ${isGExp ? 'rotate-90' : ''}`} />
+               </div>
+               
+               {isGExp && (
+                 <div className="p-4 bg-slate-50 space-y-4">
+                   {Object.keys(groupedByGame[gId]).map(mId => {
+                     const modeName = modes.find(m=>m.id===mId)?.name || 'Unknown Mode';
+                     const isMExp = expM === mId;
+                     const matchCount = groupedByGame[gId][mId].length;
+                     
+                     return (
+                       <div key={mId} className="border border-blue-100 rounded-xl bg-white overflow-hidden shadow-sm">
+                         <div className="p-3 bg-blue-50/50 text-blue-900 font-bold uppercase flex justify-between items-center cursor-pointer hover:bg-blue-50 transition-colors" onClick={()=>setExpM(isMExp ? null : mId)}>
+                           <div className="flex items-center gap-2">
+                             {modeName} <span className="bg-blue-600 text-white text-[10px] px-2 py-0.5 rounded-full shadow-sm">{matchCount} Matches</span>
+                           </div>
+                           <ChevronRight className={`w-4 h-4 text-blue-500 transition-transform ${isMExp ? 'rotate-90' : ''}`} />
+                         </div>
+                         
+                         {isMExp && (
+                           <div className="divide-y border-t border-blue-100 bg-white">
+                             {groupedByGame[gId][mId].map(t => {
+                                if(tb==='history') return <details key={t.id} className="p-5 bg-white group cursor-pointer"><summary className="list-none font-black text-lg uppercase outline-none flex justify-between items-center"><div className="flex items-center gap-3">{t.status==='cancelled'?<XCircle className="text-rose-500 w-5 h-5"/>:<Trophy className="text-emerald-500 w-5 h-5"/>}{t.title} <span className="text-[10px] text-slate-400 bg-slate-100 px-2 py-0.5 rounded">{fDate(t.dateTime)}</span></div><div className="flex gap-4">
+                                  {u.role === 'admin' && <button onClick={(e)=>{e.preventDefault(); md({t:'confirm',title:'Delete Match',msg:'Delete completely from history?',onC:async ()=>{ try { await deleteDoc(doc(db,'artifacts',appId,'public','data','tournaments',t.id)); md({t:'alert',title:'Success',msg:'Updated successfully'}); loadData(); } catch(err){ md({t:'err',title:'Error',msg:err.message}); } }})}} className="text-rose-500 bg-rose-50 p-2 rounded cursor-pointer hover:bg-rose-500 hover:text-white"><Trash2 className="w-4 h-4"/></button>}
+                                  <ChevronRight className="w-5 h-5 text-slate-400 group-open:rotate-90 m-auto"/></div></summary><div className="pt-4 mt-4 border-t space-y-4 cursor-default"><div className="flex gap-4"><div className="bg-slate-50 p-3 rounded border flex-1"><div className="text-[10px] font-black text-slate-400 uppercase">Room ID</div><div className="font-mono font-bold text-lg">{t.roomId||'N/A'}</div></div><div className="bg-slate-50 p-3 rounded border flex-1"><div className="text-[10px] font-black text-slate-400 uppercase">Pass</div><div className="font-mono font-bold text-lg">{t.password||'N/A'}</div></div></div><div className="bg-blue-50 p-3 rounded border border-blue-100 text-sm font-bold">{t.customText||'No custom text.'}</div>{t.status==='result'&&<div className="border rounded-xl overflow-hidden"><table className="w-full text-sm text-left"><thead className="bg-slate-100 text-[10px] uppercase font-black"><tr><th className="p-3">Player</th><th className="p-3">Kills</th><th className="p-3">Earned</th></tr></thead><tbody>{(t.results||[]).map(r=><tr key={r.uid}><td className="p-3 font-bold uppercase">{r.gameName}</td><td className="p-3 font-bold">{r.kills}</td><td className="p-3 font-black text-emerald-600">{r.earned}</td></tr>)}</tbody></table></div>}</div></details>;
+                                return <div key={t.id} className={`p-5 flex flex-col md:flex-row justify-between items-center gap-4 ${(t.joinedUsers?.length||0)>=(t.totalSlots||0)?'bg-emerald-50/30':''}`}><div className="flex items-center gap-4"><div className="w-20 h-20 bg-slate-900 rounded-xl relative overflow-hidden">{t.bannerUrl?<img src={t.bannerUrl} className="w-full h-full object-cover opacity-80"/>:<Trophy className="m-auto mt-6 text-white/30"/>}{t.createdBy&&<span className="absolute bottom-1 left-1 bg-black/66 text-white text-[8px] px-1 rounded uppercase font-bold">By: {t.createdBy}</span>}</div><div><div className="font-black text-xl uppercase mb-1">{t.title} <span className="text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-500">{t.status}</span></div><div className="text-[10px] font-bold text-slate-500 uppercase">{fDate(t.dateTime)} | Fee: {t.entryFee} | PK: {t.perKill} | Joined: {(t.joinedUsers||[]).length}/{t.totalSlots} {(t.joinedUsers?.length||0)>=(t.totalSlots||0) && <span className="text-emerald-600 bg-emerald-100 px-1 rounded ml-1">FULL</span>}</div></div></div>
+                                <div className="flex gap-2 flex-wrap bg-slate-50 p-2 rounded-xl border">
+                                  {t.status==='upcoming'&&<>
+                                    {u.role === 'admin' && <button onClick={() => { setFd({gameId: t.gameId, modeId: t.modeId, title: t.title, bannerUrl: t.bannerUrl || '', customText: t.customText || '', dateTime: t.dateTime, type: t.type || 'solo', perKill: t.perKill, entryFee: t.entryFee, totalSlots: t.totalSlots, status: t.status }); setEditId(t.id); setFo(true); window.scrollTo(0,0); }} className="px-4 py-2 bg-blue-100 text-blue-700 border border-blue-200 font-black text-[10px] uppercase rounded-lg cursor-pointer">EDIT</button>}
+                                    <button onClick={()=>md({t:'room',title:'Set Room & Start',onC: async (r,p)=>{
+                                      if(!r || !p){ alert('Room ID and Password required!'); return; }
+                                      try {
+                                        await updateDoc(doc(db,'artifacts',appId,'public','data','tournaments',t.id),{roomId:r,password:p,status:'ongoing'});
+                                        const targetUids = (t.joinedUsers||[]).map(ju => ju.uid || ju);
+                                        if (targetUids.length > 0) {
+                                          await sendPushNotification({ title: `🎮 ${t.title} — Room is LIVE!`, body: `Room ID: ${r}\nPassword: ${p}`, targetUids, data: { type: 'room_live', roomId: String(r), password: String(p), matchTitle: String(t.title), matchId: String(t.id) } });
+                                        }
+                                        md({t:'alert',title:'Success',msg:'Room updated & push notification sent!'}); loadData();
+                                      } catch(err) { md({t:'err',title:'Error',msg:err.message}); }
+                                    }})} className="px-4 py-2 bg-amber-500 text-white font-black text-[10px] uppercase rounded-lg cursor-pointer">START</button>
+                                  </>}
+                                  {t.status==='ongoing'&&<>
+                                     {u.role === 'admin' && <button onClick={() => { setFd({gameId: t.gameId, modeId: t.modeId, title: t.title, bannerUrl: t.bannerUrl || '', customText: t.customText || '', dateTime: t.dateTime, type: t.type || 'solo', perKill: t.perKill, entryFee: t.entryFee, totalSlots: t.totalSlots, status: t.status }); setEditId(t.id); setFo(true); window.scrollTo(0,0); }} className="px-4 py-2 bg-blue-100 text-blue-700 border border-blue-200 font-black text-[10px] uppercase rounded-lg cursor-pointer">EDIT</button>}
+                                     <button disabled={isLoadingResults} onClick={()=>oR(t)} className="px-4 py-2 bg-emerald-600 text-white font-black text-[10px] uppercase rounded-lg cursor-pointer disabled:opacity-50">{isLoadingResults ? 'LOADING...' : 'RESULTS'}</button>
+                                  </>}
+                                  {(t.status==='upcoming'||t.status==='ongoing')&&<button onClick={()=>st(t,'cancelled')} className="px-4 py-2 bg-white text-rose-500 border font-black text-[10px] uppercase rounded-lg cursor-pointer hover:bg-rose-50">CANCEL</button>}
+                                </div>
+                                <div className="w-full mt-4 bg-slate-50 p-3 rounded-lg border text-xs">
+                                  <div className="font-black text-slate-400 uppercase mb-2">Joined Players ({(t.joinedUsers||[]).length})</div>
+                                  <div className="max-h-32 overflow-y-auto space-y-1">
+                                    {(t.joinedUsers||[]).map((ju, i) => {
+                                      const uid = ju.uid || ju; const joinedAt = ju.joinedAt;
+                                      return <div key={i} className="flex justify-between items-center bg-white p-2 border rounded"><div className="font-bold uppercase flex items-center gap-2">UID: {uid}</div>{joinedAt && <div className="text-[9px] text-slate-400 font-bold uppercase">{fDate(joinedAt)}</div>}</div>;
+                                    })}
+                                  </div>
+                                </div>
+                                </div>;
+                             })}
+                           </div>
+                         )}
+                       </div>
+                     )
+                   })}
+                 </div>
+               )}
+             </div>
+           )
+        })}
+      </div>
+    </div></div></div>;
 }
 
 function DeviceBanMgr({ md, u: adminUser, cache, setCache }) {
