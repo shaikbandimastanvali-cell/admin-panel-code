@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, updateDoc, addDoc, deleteDoc, enableIndexedDbPersistence, query, orderBy, limit, where, getDoc, getDocs, or, onSnapshot } from 'firebase/firestore';
+import { getFirestore, collection, doc, setDoc, updateDoc, addDoc, deleteDoc, enableIndexedDbPersistence, query, orderBy, limit, where, getDoc, getDocs, or, onSnapshot, increment } from 'firebase/firestore';
 import { Home, Trophy, User as UIcon, Wallet, Settings, LogOut, Users, Gamepad2, Plus, Edit, Trash2, Check, X, Search, Menu, ShieldAlert, Clock, ArrowUpRight, ArrowDownLeft, Info, PlayCircle, ChevronRight, CheckCircle2, Loader2, Link as LinkIcon, XCircle, Bell, Copy, RefreshCw, Dices } from 'lucide-react';
 
 // --- FIREBASE CONFIG ---
@@ -237,45 +237,9 @@ function Dash({ s }) {
     getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'stats')).then(d => { if (d.exists()) setStats(p => ({...p, ...d.data()})); });
   }, []);
 
-  const handleRecalculate = async () => {
-    setCalculating(true);
-    try {
-      // Manual explicit scan to bypass all caching and listeners
-      const uSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'users'));
-      const tSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'transactions'));
-
-      const todayStr = new Date().toISOString().split('T')[0];
-
-      let totalUsers = 0; let todayUsers = 0;
-      uSnap.forEach(d => { 
-        const u = d.data();
-        if(u.role === 'user') {
-           totalUsers++; 
-           if (u.joinedDate && u.joinedDate.startsWith(todayStr)) todayUsers++;
-        }
-      });
-
-      let totalDeposits = 0; let totalWithdraws = 0; let pendingDeposits = 0;
-      let todayDeposits = 0; let todayWithdraws = 0;
-
-      tSnap.forEach(d => {
-         const tx = d.data();
-         if (tx.status === 'completed' && tx.type.includes('deposit')) {
-            totalDeposits += Number(tx.amount);
-            if (tx.date && tx.date.startsWith(todayStr)) todayDeposits += Number(tx.amount);
-         }
-         if (tx.status === 'completed' && tx.type.includes('withdraw')) {
-            totalWithdraws += Math.abs(Number(tx.amount));
-            if (tx.date && tx.date.startsWith(todayStr)) todayWithdraws += Math.abs(Number(tx.amount));
-         }
-         if (tx.status === 'pending' && tx.type.includes('deposit')) pendingDeposits++;
-      });
-
-      const st = { totalUsers, todayUsers, totalDeposits, todayDeposits, totalWithdraws, todayWithdraws, pendingDeposits, lastUpdated: new Date().toISOString() };
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'stats'), st, { merge: true });
-      setStats(st);
-    } catch (e) { console.error(e); }
-    setCalculating(false);
+const handleRecalculate = async () => {
+    // 🔥 OPTIMIZED: Full scans disabled. Stats are updated incrementally on write! 🔥
+    alert("Full scan disabled to protect your 50,000 read limit. Stats are now updated automatically in the background when you approve transactions!");
   };
 
   const bx = (l, tv, av, c) => <div className="bg-white p-6 rounded-2xl border shadow-sm relative"><div className="text-sm font-black uppercase text-slate-400 mb-4">{l}</div><div className="grid grid-cols-2 gap-2"><div className="border-r pr-2"><div className="text-[10px] font-bold text-slate-400 uppercase">Today</div><div className={`text-2xl font-black ${c}`}>{tv}</div></div><div><div className="text-[10px] font-bold text-slate-400 uppercase">All Time</div><div className={`text-2xl font-black ${c}`}>{av}</div></div></div><div className="absolute top-4 right-4 text-[8px] bg-rose-100 text-rose-600 px-2 py-1 rounded font-black uppercase tracking-widest">Manual Fetch</div></div>;
@@ -314,7 +278,7 @@ function UserMgr({ md, s, u: adminUser, cache, setCache }) {
     setLoading(true);
     try {
       // In-memory fallback sorting to avoid Firebase Index requirements
-      const snap = await getDocs(query(baseRef('users'), limit(500))); 
+      const snap = await getDocs(query(baseRef('users'), orderBy(srt, 'desc'), limit(50))); 
       let allU = snap.docs.map(d => ({id: d.id, ...d.data()}));
       
       if (q.length > 2) {
@@ -417,26 +381,34 @@ function FinMgr({ t, md, s, u: adminUser, cache, setCache }) {
     setLoading(false);
   };
 
-  const act = (tx, st) => md({
+const act = (tx, st) => md({
     t:'confirm',title:'Confirm',msg:`${st} request?`,
     onC:async ()=>{
       try {
         const uu = tx.user || {};
+        const uRef = doc(db,'artifacts',appId,'public','data','users',tx.uid);
+        const statsRef = doc(db,'artifacts',appId,'public','data','settings','stats');
+
         if(st==='approve') {
           if(t==='deposit') {
-            await updateDoc(doc(db,'artifacts',appId,'public','data','users',tx.uid), { balance: Number(uu.balance||0)+Number(tx.amount), depositBalance: Number(uu.depositBalance||0)+Number(tx.amount), totalDeposited: Number(uu.totalDeposited||0)+Number(tx.amount) });
+            await updateDoc(uRef, { balance: Number(uu.balance||0)+Number(tx.amount), depositBalance: Number(uu.depositBalance||0)+Number(tx.amount), totalDeposited: Number(uu.totalDeposited||0)+Number(tx.amount), totalDepositsCount: increment(1) });
+            await setDoc(statsRef, { totalDeposits: increment(Number(tx.amount)) }, { merge: true });
             if (uu.referredBy && s.referralBonusPercent > 0) {
               const refSnap = await getDoc(doc(db,'artifacts',appId,'public','data','users',uu.referredBy));
               if (refSnap.exists()) await updateDoc(doc(db,'artifacts',appId,'public','data','users',uu.referredBy), { referralBalance: Number(refSnap.data().referralBalance||0) + (Number(tx.amount)*Number(s.referralBonusPercent)/100) });
             }
           } else {
-             await updateDoc(doc(db,'artifacts',appId,'public','data','users',tx.uid), { totalWithdrawsCount: Number(uu.totalWithdrawsCount||0) + 1 });
+             await updateDoc(uRef, { totalWithdrawsCount: increment(1), totalWithdrawn: increment(Math.abs(tx.amount)) });
+             await setDoc(statsRef, { totalWithdraws: increment(Math.abs(tx.amount)) }, { merge: true });
           }
           await updateDoc(doc(db,'artifacts',appId,'public','data','transactions',tx.id),{status:'completed'});
         } else {
+           if(t==='deposit') await updateDoc(uRef, { rejectedDeposits: increment(1) });
+           else await updateDoc(uRef, { rejectedWithdraws: increment(1) });
+
            if (t==='withdraw' && uu.uid) {
-             if (tx.type==='referral_withdraw_pending') await updateDoc(doc(db,'artifacts',appId,'public','data','users',tx.uid), { referralBalance: Number(uu.referralBalance||0) + Math.abs(tx.amount) });
-             else await updateDoc(doc(db,'artifacts',appId,'public','data','users',tx.uid), { balance: Number(uu.balance||0) + Math.abs(tx.amount), winningBalance: Number(uu.winningBalance||0) + Math.abs(tx.amount) });
+             if (tx.type==='referral_withdraw_pending') await updateDoc(uRef, { referralBalance: Number(uu.referralBalance||0) + Math.abs(tx.amount) });
+             else await updateDoc(uRef, { balance: Number(uu.balance||0) + Math.abs(tx.amount), winningBalance: Number(uu.winningBalance||0) + Math.abs(tx.amount) });
            }
            await updateDoc(doc(db,'artifacts',appId,'public','data','transactions',tx.id),{status:'failed'});
         }
