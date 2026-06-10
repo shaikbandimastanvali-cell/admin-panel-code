@@ -460,27 +460,16 @@ const act = (tx, st) => md({
   </div></div>;
 }
 
+// 🔥 OPTIMIZED: Reads stats directly from the pre-fetched User Document (0 Extra Reads!) 🔥
 function PendingTxCard({ x, uData, act, cT, s }) {
-  const [stats, setStats] = useState({ deps: 0, depAmt: 0, wids: 0, widAmt: 0, rejDeps: 0, rejWids: 0 });
-
-  useEffect(() => {
-    let isMounted = true;
-    const fetchHistoryStats = async () => {
-      try {
-        const txSnap = await getDocs(query(baseRef('transactions'), where('uid', '==', x.uid)));
-        let deps=0, depAmt=0, wids=0, widAmt=0, rejDeps=0, rejWids=0;
-        txSnap.forEach(doc => {
-           const t = doc.data();
-           if (t.adminDeleted) return;
-           if (t.type.includes('deposit')) { if (t.status === 'completed') { deps++; depAmt+=Number(t.amount); } if (t.status === 'failed') rejDeps++; } 
-           else if (t.type.includes('withdraw')) { if (t.status === 'completed') { wids++; widAmt+=Math.abs(Number(t.amount)); } if (t.status === 'failed') rejWids++; }
-        });
-        if (isMounted) setStats({ deps, depAmt, wids, widAmt, rejDeps, rejWids });
-      } catch(e) {}
-    };
-    fetchHistoryStats();
-    return () => { isMounted = false; };
-  }, [x.uid]);
+  const stats = {
+    deps: uData?.totalDepositsCount || 0,
+    depAmt: uData?.totalDeposited || 0,
+    wids: uData?.totalWithdrawsCount || 0,
+    widAmt: uData?.totalWithdrawn || 0,
+    rejDeps: uData?.rejectedDeposits || 0,
+    rejWids: uData?.rejectedWithdraws || 0
+  };
 
   const upi = x.description?.includes('to ') ? x.description.split('to ')[1] : '';
 
