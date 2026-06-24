@@ -354,22 +354,57 @@ function DeviceBanMgr({ d, md, u: adminUser }) {
 }
 
 function MessageMgr({ d, md, u: adminUser }) {
-  const sorted = [...(d.messages || [])].sort((a,b) => new Date(b.createdAt||0) - new Date(a.createdAt||0));
+  const sorted = [...(d.messages || [])].sort((a,b) => new Date(b.createdAt||0).getTime() - new Date(a.createdAt||0).getTime());
 
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center bg-white p-6 rounded-2xl border">
         <h2 className="text-xl font-black uppercase">Messages & Notifications</h2>
         <div className="flex gap-2">
-          <button onClick={() => md({t:'message', title:'New Message', ul: d.users, onC: async (title, body, targetType, searchTxt, targetUids) => {
-            if(!title || !body) return;
-            if(targetType === 'specific' && (!targetUids || targetUids.length === 0)) return md({t:'err', title:'Error', msg:'Please select at least one user.'});
-            try {
-              await runDb(supabase.from('messages').insert({ id: generateId(), title, body, createdAt: new Date().toISOString(), readBy: [], targetUids: targetType === 'specific' ? targetUids : ['all'] }));
-              await sendPushNotification({ title, body, targetUids: targetType === 'specific' ? targetUids : ['all'], users: d.users });
-              md({t:'alert', title:'Success', msg:'Message pushed successfully'});
-            } catch(e) { md({t:'err', title:'Notification Error', msg:e.message}); }
-          }})} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-black text-xs uppercase cursor-pointer"><Plus className="w-4 h-4 inline"/> Create</button>
+<button onClick={() => md({
+            t: 'message', 
+            title: 'New Message', 
+            ul: d.users, 
+            onC: async (title, body, targetType, searchTxt, targetUids) => {
+              if(!title || !body) return;
+              if(targetType === 'specific' && (!targetUids || targetUids.length === 0)) return md({t:'err', title:'Error', msg:'Please select at least one user.'});
+              
+              try {
+                // 1. Save to Supabase
+                await runDb(supabase.from('messages').insert({ id: generateId(), title, body, createdAt: new Date().toISOString(), readBy: [], targetUids: targetType === 'specific' ? targetUids : ['all'] }));
+                
+                // 2. Grab the live FCM Tokens from Supabase
+                let query = supabase.from('users').select('fcmToken').not('fcmToken', 'is', null);
+                if (targetType === 'specific') {
+                   query = query.in('uid', targetUids);
+                }
+                const { data: tokenData } = await query;
+                const tokens = tokenData?.map(t => t.fcmToken).filter(t => t && t.trim() !== '') || [];
+
+// 3. Ping YOUR Vercel API to wake up the phones!
+                if (tokens.length > 0) {
+                   
+                   // 🔥 FIXED: Points directly to api/sendNotification.js
+                   const response = await fetch('/api/sendNotification', { 
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ title: title, body: body, fcmTokens: tokens })
+                   });
+
+                   if (!response.ok) {
+                      const errText = await response.text();
+                      throw new Error(`Vercel API Error (${response.status}): ${errText}`);
+                   }
+                }
+
+                md({t:'alert', title:'Success', msg:`Message sent and ${tokens.length} phones pinged!`});
+              } catch(e) { 
+                md({t:'err', title:'Push Failed', msg: e.message}); 
+              }
+            }
+          })} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-black text-xs uppercase cursor-pointer">
+            <Plus className="w-4 h-4 inline"/> Create
+          </button>
         </div>
       </div>
       <div className="bg-white rounded-2xl border overflow-hidden">
