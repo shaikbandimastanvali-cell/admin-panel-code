@@ -9,7 +9,7 @@ const supabaseUrl = 'https://anodayscpvhbvsbxecmf.supabase.co';
 const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFub2RheXNjcHZoYnZzYnhlY21mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4ODExNjMsImV4cCI6MjA5NjQ1NzE2M30.rzmZ8AEW0Vwj4KZF2xhRuxe1lEMRHBfiSm77hvutNNk';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-// --- FIREBASE (KEPT STRICTLY FOR FCM PUSH NOTIFICATIONS) ---
+// ---  FIREBASE (KEPT STRICTLY FOR FCM PUSH NOTIFICATIONS) ---
 const firebaseConfig = {
   apiKey: "AIzaSyB1WhNWUsZ2CmZHMa_7DpP4_vx_AnN9g2E",
   authDomain: "ff-tournament-app-bd64e.firebaseapp.com",
